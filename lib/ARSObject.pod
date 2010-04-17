@@ -1,0 +1,1001 @@
+=head1 NAME
+
+ARSObject - high level interface above ARS module
+
+=head1 SYNOPSIS
+
+  use ARSObject;
+  my $s =ARSObject->new(-srv =>'ip address',-usr => 'username',-pswd =>'******'
+		,-storable => 0
+		,-schema =>['BMC.CORE:BMC_ComputerSystem','BMC.CORE:BMC_ApplicationSystem']
+		,-metaid =>{
+		'1' => 'RequestId'
+		,'6' => 'ModifiedDate'
+		,'179' => 'InstanceId'
+		,'1000000001' => {fieldName=>'Company'}
+		,'200000020' => 'Name'
+		});
+  $s->connect();
+  my $hac ={};
+  $s->query(-from=>'BMC.CORE:BMC_ComputerSystem'
+			,-where=>"('DatasetId'=\"BMC.ASSET\")"
+				." AND ('Company'=\"$company\")"
+			,-fields=>['Name', 'ModifiedDate', 'RequestId', 'InstanceId', 'ShortDescription', 'InstanceId', 'DatasetId', 'TokenId', 'OwnerName', 'OwnerContact', 'TagNumber', 'Description', 'HostName', 'Domain', 'Workgroup', 'CMDBRowLevelSecurity', 'Company', 'Region', 'AssetLifecycleStatus']
+			,-order=>['Name']
+			,-for=>sub{$hac->{$_[3]->{Name}} =$_[3];
+				}
+		);
+  print $s->dsdump($hac);
+
+
+=head1 DESCRIPTION
+
+This module is intended for capable scripts above L<ARS|ARS> module
+(L<../../ARSPerl/index.html>).
+
+It caches metadata alike L<Remedy::ARSTools|Remedy/ARSTools>,
+but uses L<Data::Dumper|Data/Dumper> or L<Storable|Storable> module.
+And metadata model is directly given from ARS::ars_GetFieldTable()/ARS::ars_GetField(),
+unlike L<ARSOOForm|ARSOOForm> and L<Remedy::ARSTools|Remedy/ARSTools>.
+And additional description level (C<-metadn>/C<-metaid>) added to unify field names
+and extend conversion capabilities of field values.
+
+Field names and values are translated (C<-strFields>/C<strIn>/C<strOut>)
+as possible.
+
+C<query>() method supports iterator sub{} and uses ARS::ars_GetListEntry(), 
+ARS::ars_GetListEntryWithFields(), ARS::ars_GetEntry() calls
+as appropriate with parameters given.
+
+C<entry>(), C<entryIns>(), C<entryUpd>(), C<entryDel>() methods 
+are usual to manipulate records.
+
+C<entryNew>() method may be used to form new record hash with default values for C<entryIns>().
+
+C<entryDif>() method may be used to minimise data for C<entryUpd>().
+
+C<AUTOLOAD>() method is to call 'ARS::ars_XXX' functions as methods.
+
+Special processing added for 'HPD:Help Desk' ITSM Suite form.
+
+C<Variable files> may be used to cache any data.
+
+Misc C<Utility Methods> intended for strings, dates, data structures.
+
+C<Utility Objects> added to simplify and unify access to 
+L<DBI|DBI>, L<CGI|CGI>, L<Net::SMTP|Net/SMTP> modules.
+
+
+
+=back
+
+
+=head1 CLASSIFICATION
+
+=over
+
+
+=item Creation and Configuration
+
+C<new>, C<set>, C<Slots>
+
+
+=item Error Processing and Echo
+
+C<-die>, C<-warn>, C<-echo>, C<-cpcon>/C<cpcon>;
+C<ars_errstr>, C<dbierrstr>
+
+
+=item Connection
+
+C<connect>(C<-srv> => server, C<-usr> => name, C<-pswd> => password, C<-lang> => language);
+C<-ctrl>
+
+C<dbiconnect>(C<-dbiconnect>); C<-dbi>
+
+
+=item Metadata
+
+C<connect>;
+C<-schema>, C<-meta>, C<-metax>, C<-metadn>, C<-metaid>, C<-schgen>, C<-strFields>;
+C<Variable files>; C<lsflds>
+
+
+
+=item Variable files
+
+C<-vfbase>, C<-storable>;
+C<vfname>, C<vfload>, C<vfstore>, C<vfdata>, C<vfhash>, C<vfdistinct>
+
+
+=item ARS methods
+
+C<connect>, C<query>, C<entry>, C<entryNew>, C<entryIns>, C<entryUpd>, C<entryDel>, C<AUTOLOAD>;
+
+C<-strFields>, C<strIn>, C<strOut>;
+
+C<arsquot>;
+
+C<-maxRetrieve>
+
+
+
+=item Utility Methods
+
+C<strquot>, C<strquot2>, C<arsquot>;
+
+C<cptran>, C<cpcon>;
+
+C<strtime>, C<timestr>, C<timeadd>;
+
+C<dsquot>, C<dsquot1>;
+
+C<dsdump>, C<dsparse>, C<dscmp>, C<dsunique>;
+
+C<fload>, C<fstore>
+
+
+
+=item Utility Objects
+
+C<dbi>, C<-dbi>, C<dbiconnect>, C<-dbiconnect>;
+C<dbiquery>, C<dbido>; C<dbierrstr>
+
+C<cgi>, C<-cgi>, C<cgiconnect>;
+C<cgipar>, C<cgiesc>, C<cgitfrm>, C<cgitext>, C<cgistring>, C<cgiselect>, C<cgiddlb>
+
+C<smtp>, C<-smtp>, C<smtpconnect>, C<-smtphost>; C<smtpsend>
+
+
+=back
+
+
+=head1 SLOTS
+
+=over
+
+=item Slots
+
+
+=item -cgi
+
+	=> undef || CGI object
+
+(C<Utility Objects>)
+L<CGI|CGI> utility object.
+See also C<cgi> method.
+
+
+=item -cpcon
+
+	=> undef || sub{}(self, arg,...) -> translated
+
+(C<Error Processing and Echo>)
+Translation sub{} for error messages and C<-echo> printout.
+I.e. sub{$_[0]->C<cptran>('ansi'=>'oem',@_[1..$#_])}
+
+
+=item -ctrl
+
+	=> undef || ARS control struct
+
+(C<Connection>)
+ARS control struct from ARS::ars_Login()
+
+
+
+=item -dbi
+
+	=> undef || DBI object
+
+=item -dbiconnect
+
+	=> undef || connection string || [connect args]
+
+(C<Utility Objects>)
+L<DBI|DBI> utility object and connect specification to create it.
+See also C<dbi> and C<dbiconnect> methods.
+
+
+
+=item -die
+
+	=> undef || sub{}
+
+	=> set(-die => 'Carp' || 'CGI::Carp' || 'CGI::Carp qw(fatalsToBrowser warningsToBrowser)')
+
+(C<Error Processing and Echo>)
+Error die sub{}.
+The most C<Methods> dies when error.
+Call C<set>(C<-die> => 'Carp') to use L<Carp|Carp> module.
+Call C<set>(C<-die> => 'CGI::Carp fatalsToBrowser') to use L<CGI::Carp|CGI/Carp> module;
+L<CGI::Carp|CGI/Carp>::set_message() may be used also.
+
+See also C<-warn>, C<-cpcon>
+
+
+=item -echo
+
+	=> 0 | 1
+
+(C<Error Processing and Echo>)
+Echo printout switch.
+Temporarilly may be used as an argument for specific methods.
+alike C<query> and C<entryIns>.
+
+
+
+=item -entryNo
+
+	=> entryIns()
+
+(C<ARS methods>)
+The logical number of the entry inserted by C<entryIns>().
+
+
+
+=item -lang
+
+	=> '' || 'ARS language' || 'en_US' || 'ru_RU'...
+
+(C<Connection>)
+ARS language to use for session, i.e. 'en_US'
+
+
+=item -maxRetrieve
+
+	=> 0 || number of rows
+
+(C<ARS methods>)
+Max number of rows to retrieve from ARS server with C<query> method.
+
+
+=item -meta
+
+	=> {...}
+
+(C<Metadata>)
+Forms metadata from ARS server:
+
+{formName}->{-fields}->{fieldName}=>{}, 
+
+{formName}->{-fldids}->{fieldId}=>{}.
+
+Futher data model is directly given from ARS::ars_GetFieldTable()/ARS::ars_GetField()
+excluding C<-metax>.
+
+Additional parameters may be:
+'fieldLbl' => label, 'fieldLblc' => label cmt
+
+
+=item -metaid
+
+	=> {fieldId => {fieldName=>'name',FieldId=>id, strIn|strOut=>sub{}},...}
+
+=item -metadn
+
+	=> {fieldName => {fieldName=>'name',FieldId=>id, strIn|strOut=>sub{}},...}
+
+(C<Metadata>)
+Commonly used fields with common names and value translation.
+Data translation sub{}s may be specified as
+
+'strOut'|'strIn' => sub(self,form,{field},$_=value){} -> translated value.
+
+This sub{}s may use C<strOut>() and C<strIn> methods.
+
+
+=item -metax 
+
+	=> ['displayInstanceList','permissions']
+
+(C<Metadata>)
+Field parameters to exclude from C<-meta> to decrease memory usage.
+
+
+=item -pswd
+
+	=> undef || ''
+
+(C<Connection>)
+ARS password string to login with
+
+
+=item -schema
+
+	=> undef || [form name, form name...]
+
+(C<Metadata>)
+ARS forms or schemas to use.
+Metadata will be loaded to C<-meta> and may be cached with C<vfname>(C<-meta>)
+if C<-schgen>.
+
+
+=item C<-schgen> 
+
+	=> 1 || 0 
+	|| 2 || [schema,...]
+
+(C<Metadata>)
+Cache metadata from ARS server using C<vfname>(C<-meta>)?
+Or each session get metadata from ARS server.
+
+	0 - get metadata from server, do not use cache file.
+	1 - generate cache file if not exists, else load this file.
+	2 - renew schema definitions using timestamps.
+	[schema,...] - list of schemas to renew.
+
+
+=item -smtp
+
+	=> undef || Net::SMTP object
+
+=item -smtphost
+
+	=> undef || SMTP host name
+
+
+(C<Utility Objects>)
+L<Net::SMTP|Net/SMTP> utility object and connect specification to create it.
+See also C<smtp> and C<smtpconnect> methods.
+
+
+
+=item -storable
+
+	=> 1 || 0
+
+(C<Variable files>)
+Use L<Storable|Storable> module for variable files?
+Or L<Data::Dumper|Data/Dumper> will be used.
+
+
+=item -srv
+
+	=> undef || 'ARS server name'
+
+(C<Connection>)
+ARS server name to connect
+
+
+=item -strFields
+
+	=> 1 || 0
+
+(C<ARS methods>)
+Translate ARS field values using metadata and conversion sub{}s
+(C<-meta>, C<-metaid>, C<-metadn>)?
+
+
+=item -usr
+
+	=> undef || 'ARS user name'
+
+(C<Connection>)
+ARS user name to login under
+
+
+=item -vfbase
+
+	=> 'script file path name-' || 'base file path name' || 'directory path/'
+
+(C<Variable files>)
+Variable files base path name, used by C<vfstore>(), C<vfload>(), C<vfname>().
+Default is formed from script file name without extensions and with '-' added.
+
+
+
+=item -warn
+
+	=> undef
+
+(C<Error Processing and Echo>)
+Error warn sub{}.
+Call C<set>(C<-die> => 'Carp') to use L<Carp|Carp> module,
+or C<set>(C<-die> => 'CGI::Carp') to use L<CGI::Carp|CGI/Carp> module.
+See also C<-cpcon>.
+
+
+
+
+
+=back
+
+
+
+=head1 METHODS
+
+=over
+
+=item Methods
+
+
+
+=item ars_errstr () -> $ARS::ars_errstr
+
+(C<Error Processing and Echo>)
+Last ARS error.
+
+
+
+=item arsquot (string) -> escaped and quoted for ARS
+
+Quote and escape string for ARS.
+See also C<strquot>/C<strquot2>
+
+
+
+=item AUTOLOAD ()
+
+(C<ARS methods>)
+Use object->arsXXX() syntax for ARS:ars_XXX(ctrl,...) calls.
+
+
+
+=item C<cgi> () -> CGI object
+
+=item C<cgi> (CGI->new args) -> CGI object
+
+(C<Utility Objects>)
+Access to L<CGI|CGI> object in C<-cgi>.
+It will be automatically created with C<cgiconnect>() if not exists.
+
+
+
+=item cgiconnect (CGI args) -> CGI object
+
+(C<Utility Objects>)
+Connect to L<CGI|CGI>.
+
+
+
+=item cgiddlb (-name=>name, ?-title=>comment, ?-values=>[values], ?-labels=>{value=>display,..}, ?-default=>value, ?-override=>bool,...) -> drop-down list box HTML
+
+(C<Utility Objects>)
+Generate drop-down list box HTML using L<CGI|CGI> widgets.
+This is alike C<cgiselect>, but more complex.
+
+ -strict=> - disable text editing, allow only to choose value from list
+
+
+
+=item cgiesc (string) -> escaped string
+
+(C<Utility Objects>)
+Escape string to HTML using L<CGI|CGI>->escapeHTML(@_)
+
+
+
+=item cgitfrm (?-table=>{table attrs}, ?-tr=>{tr attrs}, ?-td=>{...}, ?-th=>{...}, [cell value,...],...) -> HTML
+
+(C<Utility Objects>)
+Generate simple HTML form in table layout using L<CGI|CGI>->start_form(),
+L<CGI|CGI>->table(), L<CGI|CGI>->end_form().
+'th' tag will be used for simple strings as usual labels, 'td' tag - for strings started with HTML tags.
+
+
+
+=item cgipar() -> parameters
+
+=item cgipar(name) -> value
+
+=item cgipar(name, value)
+
+(C<Utility Objects>)
+Get or set L<CGI|CGI> parameter - L<CGI|CGI>->param(@_)
+
+
+
+=item cgiselect (-name=>name, ?-title=>comment, ?-values=>[values], ?-labels=>{value=>display,..}, ?-default=>value, ?-override=>bool,...) -> selection HTML field
+
+(C<Utility Objects>)
+Generate selection field HTML using L<CGI|CGI>->popup_menu(@_)
+
+ -onchange=>1 - reload form when value changed
+
+
+
+=item cgistring (-name=>name, ?-title=>comment, ?-default=>value, ?-override=>bool, ?-size=>number, ?-maxlength=>number,...) -> text HTML field
+
+(C<Utility Objects>)
+Generate text field HTML using L<CGI|CGI>->textfield(@_)
+
+
+
+=item cgitext(-name=>name, ?-title=>comment, ?-default=>value, ?-override=>bool, ?-rows=>number, ?-columns=>number,...) -> textarea HTML field
+
+(C<Utility Objects>)
+Generate HTML textarea field using L<CGI|CGI>->textarea(@_)
+
+
+
+=item connect (-param => value,...) -> connected
+
+
+(C<Connection>)
+Connect to ARS server with ARS::ars_Login()
+or verify existed connection with ARS::ars_VerifyUser().
+Load metadata (C<vfload>/C<vfstore>(C<-meta>), C<-metadn>, C<-metaid>).
+
+
+
+=item cpcon (string,...) -> translated string,...
+
+(C<Error Processing and Echo>)
+Translate strings to console codepage using C<-cptran>.
+
+
+
+=item cptran (fromCP, toCP, string,...) -> translated string,...
+
+(C<Utility Methods>)
+Translate strings between codepages using L<Encode|Encode>.
+
+
+
+=item dbi() -> DBI object
+
+(C<Utility Objects>)
+Access to L<DBI|DBI> object. C<dbiconnect> will be used if empty C<-dbi>.
+
+
+=item dbiconnect (?-dbiconnect=> connection string || [DBI->connect args]) -> DBI object
+
+(C<Utility Objects>)
+Connect to L<DBI|DBI> database using C<-dbiconnect>.
+
+
+=item dbido (dbi do args, , ?-echo=>1) -> dbi do result
+
+
+(C<Utility Objects>)
+Execute L<DBI|DBI> 'do' using C<dbi>.
+Use -echo=>1 to output command to STDOUT.
+
+
+
+=item dbierrstr () -> dbi->errstr
+
+(C<Error Processing and Echo>)
+Last L<DBI|DBI> error, <dbi>->errstr
+
+
+
+=item dbiquery (dbi query args, ?-echo=>1) -> dbi cursor object
+
+(C<Utility Objects>)
+Query L<DBI|DBI> database using C<dbi>, 'prepare', 'execute'.
+Use -echo=>1 to output command to STDOUT.
+
+
+
+=item dscmp (data1, data2) -> cmp
+
+(C<Utility Methods>)
+Compare two data structures alike L<cmp|perlop>.
+
+
+
+=item dsdump (data structure) -> dump string
+
+(C<Utility Methods>)
+Stringify any data structure using L<Data::Dumper|Data/Dumper>.
+This string may be loaded back with C<dsparse>().
+
+
+
+=item dsparse (perl string) -> data structure
+
+(C<Utility Methods>)
+Convert C<dsdump>ed string to data structure.
+
+
+
+=item dsquot (data structure) -> stringified
+
+=item dsquot1 (data structure) -> stringified, defined elements only
+
+(C<Utility Methods>)
+Quote (stringify) any data structure to human readable form.
+
+
+
+=item dsunique (item,...) -> (unique items)
+
+(C<Utility Methods>)
+Find unique items in the list given.
+
+
+
+=item entry (-form=>name, -id=>entryId,...) -> {entry}
+
+(C<ARS methods>)
+Get record from ARS using ARS::ars_GetEntry().
+
+Parameters:
+
+-form | -from | -schema => schema or form name
+
+-id => entryId
+
+-fields => [internalId | fieldName,...]
+
+-for => {} # steady hash to store each entry fetched
+
+-echo=>1 # output command to STDOUT
+
+
+
+=item entryDel (-form=>form, -id=>entryId, ?-echo=>1) -> id
+
+(C<ARS methods>)
+Delete record into ARS using ARS::ars_DeleteEntry().
+Parameters:
+
+-form | -into | -schema => schema or form name
+
+-id=>entryId
+
+-echo=>1 # output command to STDOUT
+
+
+
+=item entryDif ({old field => value,...}, {new field => value,...}, ?exclude empty) -> {values to update} | undef
+
+(C<ARS methods>)
+Distinguish the difference between two hashes of field => value.
+Returns undef when no difference.
+
+
+
+=item entryIns (-form=>form, ?-echo=>1, field => value,...) -> id | self
+
+(C<ARS methods>)
+Insert new record into ARS using ARS::ars_CreateEntry().
+Field names are translated to ids using C<-metadn>/C<-meta>.
+Field values are translated with C<strIn> when C<-strFields>.
+
+Specially for 'HPD:Help Desk': 'Incident Number' value will be generated if it is 1.
+
+Parameters:
+
+-form | -into | -schema => schema or form name
+
+-echo=>1 # output command to STDOUT
+
+field === internalId | fieldName
+
+
+
+=item entryNew (-form=>form, field=>value,...) -> {field=>value,...}
+
+(C<ARS methods>)
+Form field => value hash for a new ARS record using values given and default values in C<-meta>.
+This may be not needed, C<entryIns> may be sufficient.
+Field names are translated to ids using C<-metadn>/C<-meta>.
+Field values are translated with C<strOut> when C<-strFields>.
+
+Specially for 'HPD:Help Desk': 'Incident Number' value will be generated if it is 1.
+
+
+
+
+=item entryUpd (-form=>form, -id=>entryId, ?-echo=>1, field=>value,...) -> id
+
+(C<ARS methods>)
+Update record into ARS using ARS::ars_SetEntry().
+Field names are translated to ids using C<-metadn>/C<-meta>.
+Field values are translated with C<strIn> when C<-strFields>.
+Parameters:
+
+-form | -into | -schema => schema or form name
+
+-id=>entryId
+
+-echo=>1 # output command to STDOUT
+
+field === internalId | fieldName
+
+
+
+=item fload (?-opt, filename) -> content
+
+(C<Utility Methods>)
+Load data from file.
+Options: '-b' - L<binmode|perlfunc>.
+See also C<fstore>.
+
+
+
+
+=item fstore (?-opt, filename, string,...) -> success
+
+(C<Utility Methods>)
+Store strings to file.
+Options: '-b' - L<binmode|perlfunc>.
+Filename may be started with '>>' to add data to file.
+See also C<fload>.
+
+
+
+
+=item lsflds (additional field properties) -> list of field descriptions
+
+(C<Metadata>)
+List field descriptions from C<-meta>.
+May be useful when scripting.
+Or set C<-storable> => 0 and view C<vfname>(C<-meta>) file.
+
+
+
+=item new (param => value,...) -> ARSObject
+
+(C<Creation and Configuration>)
+Create ARSObject.
+
+
+
+=item query (-form => schema name, -where => condition,...) -> list of records
+
+=item query (..., -for => sub(self, form, id|string, ?{record}){die "last\n", die "next\n"}) -> self
+
+(C<ARS methods>)
+Query records from ARS.
+
+Field names are translated to ids using C<-metadn>/C<-meta>.
+
+Result set values are translated with C<strOut> when C<-strFields>.
+
+Values in the query condition should be converted to ARS representation explicitly:
+strings should be quoted with C<arsquot>(), dates - converted with C<timestr>().
+
+Field names or ids in the query condition should be enclosed in ' single quotes.
+
+Parameters:
+
+-form | -from | -schema => schema or form name
+
+-fields =>undef
+# if '-fields' parameter omited, list of record IDs will be returned as a result set.
+
+-fields => [{fieldId=>1, columnWidth=>number, separator=>"\t"} | {fieldName=>name, width=>number} | {field=>name|id, width=>number},...]
+# result set is strings up to 128 bytes, ARS::ars_GetListEntry() used.
+
+-fields => [fieldId | fieldName,...]
+# result set is hash refs for each record, ARS::ars_GetListEntryWithFields() used.
+
+-fetch => '*' | 1 | [fieldId|fieldName,...]
+# result set is hash refs for each record, ars_GetEntry() used for each row, this is slow.
+
+-where | -query => search condition string
+# Syntax:
+'fieldId' || 'fieldName' - fields;
+"string value" - strings;
+digits - numeric value, number of seconds as date value;
+strIn(form, fieldName, value) - to encode value for '-where'
+
+-order | -sort => [fieldId | fieldName => (1||2) | ('asc'|'desc'),...]
+# sort order, 1 - asc, 2 - desc
+
+-first ||-start => firstRetrieve # ARS::ars_GetListEntry() parameter
+
+-limit ||-max => maxRetrieve # ARS::ars_GetListEntry() parameter
+
+-for ||-foreach => sub(self, form, id|string, ?{record}){die "last\n", die "next\n"} -> self
+# iterator sub{} for each row
+
+-echo => 1
+# output query and details to STDOUT
+
+ 
+
+=item set (param => value,...) -> self
+
+=item set (param) -> value
+
+(C<Creation and Configuration>)
+Configure ARSObject.
+
+
+
+=item smtp() -> Net::SMTP object
+
+(C<Utility Objects>)
+Access to L<Net::SMTP|Net/SMTP> object. 
+C<smtpconnect> will be used if empty C<-smtp>.
+
+
+
+=item smtpconnect (?-smtphost=> name) -> Net::SMTP object
+
+(C<Utility Objects>)
+Connect to L<Net::SMTP|Net/SMTP> host using C<-smtphost>.
+
+
+
+=item smtpsend (-from || -sender => name, -to || -recipient => [name,...], -data => smtp data || (-subject => string, -text || -html => text)) -> Net::SMTP::dataend
+
+(C<Utility Objects>)
+Send L<Net::SMTP|Net/SMTP> e-mail using C<smtp>.
+
+
+
+=item strIn (schema, fieldId | fieldName | field metadata, value) -> converted
+
+(C<ARS methods>)
+Convert value for ARS internal field value representation.
+Called automatically when C<-strFields>. 
+Should be called explicitly from C<strIn> sub{} in C<-metadn>/C<-metaid>.
+May need to be called explicitly forming C<query> condition.
+See also C<strOut>, C<-strFields>.
+
+
+
+=item strOut (schema, fieldId | fieldName | field metadata, fieldValue) -> converted
+
+(C<ARS methods>)
+Convert ARS field value for external representation.
+Called automatically when C<-strFields>. 
+Should be called explicitly from C<strOut> sub{} in C<-metadn>/C<-metaid>
+and when parsing strings result from C<query>.
+See also C<strIn>, C<-strFields>.
+
+
+
+=item strquot (string) -> escaped and quoted with ''
+
+=item strquot2 (string) -> escaped and quoted with ""
+
+(C<Utility Methods>)
+Quote and escape string.
+See also C<arsquot>
+
+
+
+=item strtime (?mask, L<time|perlfunc> ||L<localtime|perlfunc> ||L<gmtime|perlfunc>) -> stringified
+
+(C<Utility Methods>)
+Stringify time value by mask.
+Default mask is 'yyyy-mm-dd hh:mm:ss' (ISO).
+L<POSIX::strftime|POSIX> uses different mask agreement.
+See also C<timestr>.
+
+
+=item timeadd (seconds, add years, ?months, ?days, ?hours, ?minutes, ?seconds) -> seconds incremented
+
+(C<Utility Methods>)
+Add values given to time given. Calculation via L<POSIX::mktime|POSIX>.
+
+
+
+=item timestr (?mask, stringified time) -> seconds
+
+(C<Utility Methods>)
+Convert stringified with C<strtime> time string to seconds form 
+with L<POSIX::mktime|POSIX>
+
+
+
+=item vfdata (-slotName) -> data structure
+
+=item vfdata (-slotName, index) -> numbered element of data array
+
+=item vfdata (-slotName, filter sub{}(self, -slot, index, $_=elem)) -> [record,...]
+
+(C<Variable files>)
+Access to data of variables file.
+Automatically C<fload>s it.
+Data structure will be treated as an array ref when index or filter argument used.
+
+
+
+=item vfdistinct (-slotName, keyName) -> [value,...]
+
+=item vfdistinct (-slotName, keyName, filter sub{}(self, -slot, keyName, keyValue, $_=elem)) -> [value,...]
+
+(C<Variable files>)
+Distinct values from C<vfdata>,
+alike [sort keys %{C<vfhash>(-slotName, keyName)}].
+Each element of C<vfdata>(-slotName) should be a hash with 'keyName' element.
+
+
+
+=item vfhash (-slotName, keyName) -> {keyName=>{key => value},...}
+
+=item vfhash (-slotName, keyName, keyValue) -> {key => value}
+
+=item vfhash (-slotName, keyName, filter sub{}(self, -slot, keyName, keyValue, $_=elem)) -> {keyName=>{key => value},...}
+
+(C<Variable files>)
+Direct access to C<vfdata> using key name and value.
+Each element of C<vfdata>(-slotName) array should be a hash with 'keyName' element.
+C<vfdata> array will be automatically cached into hash "-slotName/keyName".
+
+
+
+=item vfload (partial file name || -slotName) -> data structure
+
+(C<Variable files>)
+Load data structure from variables file using C<fload> and C<-storable>/C<dsparse>.
+
+If '-slotName' specified, this slot will contain loaded data structure.
+
+If '-slotName-load' => sub{}(self, -slotName) specified, it will be used to fill unexisted file.
+
+If '-slotName-calc' => sub{}(self, -slotName) specified, file will not be used at all, 
+data will be calculated on demand.
+
+
+
+=item vfname (partial name || -slotName) -> full var file path name in the filesystem
+
+(C<Variable files>)
+Convert partial file name to full, based on C<-vfbase>, for variables file.
+Leading '-' will be excluded.
+
+
+
+=item vfstore (partial file name, data structure) -> success
+
+=item vfstore (-slotName) -> success
+
+(C<Variable files>)
+Store data to variables file using C<-storable>/C<dsdump> and C<fstore>.
+If '-slotName' specified, this slot should contain data structure to be stored.
+
+
+
+
+
+=back
+
+
+=head1 VERSION
+
+=over
+
+
+=head2 2010-04-17
+
+Publishing 0.50 version.
+I have two prototype scripts using this module.
+
+
+=head2 2010-03-30
+
+Documentation file written
+
+
+=head2 2010-03-24
+
+Detached
+
+
+=head2 2010-03-02
+
+Started inside a script
+
+
+=back
+
+
+
+=head1 LICENSE
+
+This is free software; 
+you can use redistribute it and/or modify it 
+under the same terms as Perl itself.
+
+
+
+=head1 AUTHOR
+
+Andrew V Makarow <makarow at mail.com>,
+for Bank of Russia in Archangel
+
+
+
+
+=cut
+
+
