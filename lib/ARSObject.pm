@@ -3,7 +3,7 @@
 # High level interface above ARS module
 #
 # makarow, 2010-03-02
-#
+# K)
 #
 # 2010-03-24 detached
 # 2010-03-02 started inside a script
@@ -14,7 +14,7 @@ use UNIVERSAL;
 use strict;
 use POSIX;
 
-$VERSION = '0.50';
+$VERSION = '0.51';
 
 1;
 
@@ -35,6 +35,7 @@ sub new {	# New ARS object
 	,-storable =>undef	# Use Storable module for cache files?
 	,-schgen => 1		# 1 - use vfname('meta') for '-meta', generate it from ARS if not exists.
 				# 2 - renewable 'meta' (reserved)
+	,-schfdo => 0		# Include display only fields into schema (AR_FIELD_OPTION_DISPLAY)
 	,-meta => {}		# Forms metadata from ARS:
 				#	{formName}->{-fields}->{fieldName}=>{}
 				#	{formName}->{-fldids}->{fieldId}=>{}
@@ -195,6 +196,29 @@ sub dsunique {	# Unique list
 }
 
 
+
+sub dsmerge {	# Merge arrays or hashes
+ my $r;
+ if (ref($_[1]) eq 'ARRAY') {
+	$r =[];
+	for (my $i=1; $i <=$#_; $i++) {
+		for (my $j=0; $j <=$#{$_[$i]}; $j++) {
+			$r->[$j] =$_[$i]->[$j]
+		}
+	}
+ }
+ elsif (ref($_[1]) eq 'HASH') {
+	$r ={};
+	for (my $i=1; $i <=$#_; $i++) {
+		foreach my $k (keys %{$_[$i]}) {
+			$r->{$k} =$_[$i]->{$k}
+		}
+	}
+ }
+ $r
+}
+
+
 sub strtime {	# Stringify Time
  my $s =shift;
  my $msk =@_ ==0 || $_[0] =~/^\d+$/i ? 'yyyy-mm-dd hh:mm:ss' : shift;
@@ -243,7 +267,7 @@ sub timeadd {	# Adjust time to years, months, days,...
 
 
 sub charset {
- $_[0]->{-charset} =~/^\d/
+ $_[0]->{-charset} && ($_[0]->{-charset} =~/^\d/)
 	? 'windows-' .$_[0]->{-charset}
 	: ($_[0]->{-charset} || ($_[0]->{-cgi} && $_[0]->{-cgi}->charset())
 		|| eval('!${^ENCODING}') && eval('use POSIX; POSIX::setlocale(POSIX::LC_CTYPE)=~/\\.([^.]+)$/ ? "cp$1" : "cp1252"'))
@@ -302,6 +326,9 @@ sub fstore {		# Store file
  my $o =$_[0] =~/^-(?:\w[\w\d+-]*)*$/ ? shift : '-';
  my $f =$_[0]; $f ='>' .$f if $f !~/^[<>]/;
  print "fstore('$f')\n" if $s->{-echo};
+ # local $SIG{'TERM'} ='IGNORE';
+ # local $SIG{'INT'}  ='IGNORE';
+ # local $SIG{'BREAK'}='IGNORE';
  local *FILE;  open(FILE, $f) || return(&{$s->{-die}}($s->cpcon("fstore('$f'): cannot open: $!")));
  my $r =undef;
  if ($o =~/b/) {
@@ -334,30 +361,41 @@ sub fload {		# Load file
 
 sub vfname {		# Name of variables file
 			# (varname|-slot) -> pathname
- $_[0]->{-vfbase} .(!$_[1] ? '' : $_[1] =~/^-(.+)/ ? ($1 .'.var') : ($_[1] .'.var'));
+ return($_[0]->{-vfbase}) if !$_[1];
+ my $v =$_[1];	$v =~s/[\s.,:;|\/\\?*+()<>\]\["']/_/g;
+ $_[0]->{-vfbase} .($v =~/^-(.+)/ ? ($1 .($_[2] ||'.var')) : ($v .($_[2] ||'.var')))
 }
 
 
 sub vfstore {		# Store variables file
 			# (varname, {data}) -> success
 			# (-slot) -> success
- my($s,$f,$d)=@_;
- $d =$s->{$f} if !$d && ($f =~/^-/);
- $f =$s->vfname($f);
- $s->{-storable}
+ my($s,$n,$d)=@_;
+ $d =$s->{$n} if !$d && ($n =~/^-/);
+ my $f =$s->vfname($n, '.new');
+ my $r = $s->{-storable}
  ? Storable::store($d, $f)
 	|| return(&{$s->{-die}}($s->cpcon(($s->{-cmd} ? $s->{-cmd} .': ' : '')
 		."Storable::store('$f') -> $!")))
  : $s->fstore('-', $f, $s->dsdump($d));
+ rename($f, $s->vfname($n))
+	||return(&{$s->{-die}}($s->cpcon(($s->{-cmd} ? $s->{-cmd} .': ' : '')
+		."rename('$f','*.var') -> $!")))
+	if $r;
+ $r
 }
 
 
 sub vfload {		# Load variables file
-			# (varname|-slot, ?{use default} | load default) -> {data}
- my($s,$f,$d) =@_;	# -slot-calc, -slot-store
+			# (varname|-slot, ?{use default} | load default, ?renew | renew seconds) -> {data}
+ my($s,$f,$d,$nn) =@_;	# -slot-calc, -slot-store
  my $k =($f =~/^-/ ? $f : undef);
  $f =$s->vfname($f);
- if ($d && !-f $f) {
+ if ($nn && $nn >1) {
+	my @st =stat($f);
+	$nn =0 if $st[9] && (time() -$st[9] <$nn);
+ }
+ if ($d && ($nn || !-f $f)) {
 	if (ref($d)) {
 		$s->vfstore($k, $d =ref($d) eq 'CODE' ? &$d($s,$k) : $d);
 		$s->{$k} =$d if $k;
@@ -365,7 +403,9 @@ sub vfload {		# Load variables file
 	elsif (!$k) {
 	}
 	elsif (ref($s->{"$k-calc"}) eq 'CODE') {
-		$s->{$k} =$d =&{$s->{"$k-calc"}}($s,$k)
+		my $cc =$s->{"$k-calc"};
+		local $s->{"$k-calc"} =undef;
+		$s->{$k} =$d =&$cc($s,$k);
 	}
 	elsif (ref($s->{"$k-store"}) eq 'CODE') {
 		$s->vfstore($k, $s->{$k} =$d =&{$s->{"$k-store"}}($s,$k))
@@ -375,6 +415,12 @@ sub vfload {		# Load variables file
 	}
 	return($d)
  }
+ elsif (ref($s->{"$k-calc"}) eq 'CODE') {
+	my $cc =$s->{"$k-calc"};
+	local $s->{"$k-calc"} =undef;
+	$s->{$k} =$d =&$cc($s,$k);
+	return($d);
+ }
  my $r =$s->{-storable}
 	? Storable::retrieve($f)
 		|| return(&{$s->{-die}}($s->cpcon(($s->{-cmd} ? $s->{-cmd} .': ' : '')
@@ -382,6 +428,27 @@ sub vfload {		# Load variables file
 	: $s->dsparse($s->fload('-', $f));
  $s->{$k} =$r if $k;
  $r
+}
+
+
+
+sub vfrenew {		# Renew variables file
+ my($s,$f,$nn) =@_;	# (-slot, ?period seconds) -> vfload
+ return(1) if $f !~/^-/;
+ vfload($s,$f,1,$nn ||1);
+}
+
+
+
+sub vfclear {	# Clear vfdata() and vfhash()
+ my($s,$f) =@_;	# (-slot, ?period seconds) -> vfload
+ return(1) if $f !~/^-/;
+ delete($s->{$f});
+ foreach my $k (keys %$s) {
+	next if $k !~/^\Q$f\E[\/].+/;
+	delete $s->{$k};
+ }
+ 1;
 }
 
 
@@ -395,15 +462,31 @@ sub vfdata {	# Access to array data from variables file
 		local $_;
 		local $_[0]->{-cmd} =($_[0]->{-cmd} ? $_[0]->{-cmd} .': ' : '')
 			."vfdata('$_[1]', sub{})";
-		my ($rr, $v) =([]);
-		for(my $i=0; $i<=$#{$_[0]->{$_[1]}}; $i++) {
-			if (!defined(eval{$v =&{$_[2]}($_[0], $_[1], $i, $_ =$_[0]->{$_[1]}->[$i])}) && $@) {
-				last if $@ =~/^last[\r\n]*$/;
-				next if $@ =~/^next[\r\n]*$/;
-				return(&{$_[0]->{-die}}($_[0]->{-cmd} ." -> $@"));
+		my ($rr, $v);
+		if (ref($_[0]->{$_[1]}) eq 'ARRAY') {
+			$rr =[];
+			for(my $i=0; $i<=$#{$_[0]->{$_[1]}}; $i++) {
+				if (!defined(eval{$v =&{$_[2]}($_[0], $_[1], $i, $_ =$_[0]->{$_[1]}->[$i])}) && $@) {
+					last if $@ =~/^last[\r\n]*$/;
+					next if $@ =~/^next[\r\n]*$/;
+					return(&{$_[0]->{-die}}($_[0]->{-cmd} ." -> $@"));
+				}
+				elsif ($v) {
+					push @$rr, $_[0]->{$_[1]}->[$i]
+				}
 			}
-			elsif ($v) {
-				push @$rr, $_[0]->{$_[1]}->[$i]
+		}
+		elsif (ref($_[0]->{$_[1]}) eq 'HASH') {
+			$rr ={};
+			foreach my $i (keys %{$_[0]->{$_[1]}}) {
+				if (!defined(eval{$v =&{$_[2]}($_[0], $_[1], $i, $_ =$_[0]->{$_[1]}->{$i})}) && $@) {
+					last if $@ =~/^last[\r\n]*$/;
+					next if $@ =~/^next[\r\n]*$/;
+					return(&{$_[0]->{-die}}($_[0]->{-cmd} ." -> $@"));
+				}
+				elsif ($v) {
+					$rr->{$i} =$_[0]->{$_[1]}->{$i}
+				}
 			}
 		}
 		return($rr)
@@ -420,8 +503,9 @@ sub vfhash {	# Access to hash of array data from variables file
 		# automatically formed in memory using vfdata().
 		# (-slot, key name) -> {hash from vfdata()}
 		# (-slot, key name => key value) -> {key=>value,...}
+		# (-slot, key name => key value => elem name ) -> elem value
 		# (-slot, key name => filter sub{}(self, -slot, key, $_ = value)) -> {key=>value,...}
- my($s, $f, $k, $v) =@_;
+ my($s, $f, $k, $v, $e) =@_;
  return(&{$s->{-die}}("vfhash('$f') -> key name needed")) if !$k;
  $s->vfload($f, 1) if !$s->{$f} ||(ref($s->{$f}) eq 'CODE');
  my $kk ="$f/$k";
@@ -457,7 +541,15 @@ sub vfhash {	# Access to hash of array data from variables file
 	}
 	return($rh)
  }
- !defined($v) ? $s->{$kk} : $s->{$kk}->{$v}
+ !defined($v) 
+ ? $s->{$kk} 
+ : !defined($s->{$kk})
+ ? $s->{$kk}
+ : !ref($s->{$kk}->{$v})
+ ? $s->{$kk}->{$v}
+ : defined($e)
+ ? $s->{$kk}->{$v}->{$e}
+ : $s->{$kk}->{$v}
 }
 
 
@@ -516,7 +608,8 @@ sub connect {		# Connect to ARS server
  return($s) if $s->{-ctrl} && ARS::ars_VerifyUser($s->{-ctrl});
  $s->{-ctrl} =ARS::ars_Login(
 		$s->{-srv}, $s->{-usr}, $s->{-pswd}, $s->{-lang}
-		, '', 0, 0) || return(&{$s->{-die}}($s->cpcon($s->{-cmd} ." -> $ARS::ars_errstr")));
+		, join('-', ($ENV{COMPUTERNAME} ||$ENV{HOSTNAME} ||eval('use Sys::Hostname;hostname') ||'localhost'), getlogin() || $> || '', $$, $^T, time())
+		, 0, 0) || return(&{$s->{-die}}($s->cpcon($s->{-cmd} ." -> $ARS::ars_errstr")));
  $s->arsmeta();
  $s
 }
@@ -529,7 +622,6 @@ sub arsmeta {
 	.($s->{-schgen} ? "dumper('" .$s->vfname('meta') ."')" : 'arsmeta');
  if (ref($s->{-schgen})
  || ($s->{-schgen} && ($s->{-schgen} >1))
- || ($s->{-schgen} && (!-e $s->vfname('-meta')))
  || (!-e $s->vfname('-meta'))
 	) {
 	#
@@ -549,19 +641,17 @@ sub arsmeta {
 	}
 	else {
 		$s->{-meta} ={};
-		$vfs =1 if $s->{-schgen} && !ref($s->{-schgen}) && ($s->{-schgen} >1);
-		$s->{-schgen} =1 if $s->{-schgen};
 	}
 	foreach my $f (ref($s->{-schgen}) ? @{$s->{-schgen}} : @{$s->{-schema}}){
-		if ($vfs) {
+		if ($vfs && $s->{-meta}->{$f}) {
 			my $fa =ARS::ars_GetSchema($s->{-ctrl}, $f);
 			!$fa && return(&{$s->{-die}}($s->cpcon($s->{-cmd} .": ars_GetSchema('$f') -> $ARS::ars_errstr")));
 			# print $s->strtime($fa->{timestamp}),'/',$s->strtime($vfs), "\n", $s->cpcon($s->dsdump($fa)), "\n"; exit(0);
 			next	if !$fa
 				? 1
 				: $s->{-meta}->{$f} && $s->{-meta}->{$f}->{timestamp}
-				? $s->{-meta}->{$f}->{timestamp} >=$fa->{timestamp}
-				: $vfs >=($fa->{timestamp} +60*60);
+				? ($s->{-meta}->{$f}->{timestamp}||0) >=($fa->{timestamp}||0)
+				: $vfs >=($fa->{timestamp}||0 +60*60);
 			$s->{-meta}->{$f} ={};
 			$s->{-meta}->{$f}->{-fields} ={};
 			$s->{-meta}->{$f}->{timestamp} =$fa->{timestamp};
@@ -580,7 +670,7 @@ sub arsmeta {
 			# 'fieldId', 'fieldName', 'dataType'
 			next	if !$fm->{dataType}
 				|| ($fm->{dataType} =~/^(trim|control|table|column|page)/);
-			next	if $fm->{option} && ($fm->{option} == 4); # 'Display-only'
+			next	if !$s->{-schfdo} && $fm->{option} && ($fm->{option} == 4); # AR_FIELD_OPTION_DISPLAY
 			$s->{-meta}->{$f}->{-fields}->{$ff} =$fm;
 			if ($fm->{displayInstanceList}->{dInstanceList}
 			&& !exists($fm->{fieldLbl}) && !exists($fm->{fieldLblc})) {
@@ -713,13 +803,31 @@ sub strOut {	# Convert field value for output, using '-meta'
  $ff =ref($ff) ? $ff : $ff =~/^\d+$/ ? $s->{-meta}->{$f}->{-fldids}->{$ff} : $s->{-meta}->{$f}->{-fields}->{$ff}; 
  if (!defined($v) ||!$ff ||!$s->{-strFields}) {
  }
+ elsif ($ff->{-hashOut}) {
+	return(&{$s->{-die}}($s->cpcon(($s->{-cmd} ? $_[0]->{-cmd} .': ' : '') ."strOut('$f','" .$ff->{fieldName} ."', '$v') -> could not transate")))
+		if !exists($ff->{-hashOut}->{$v});
+	$v =$ff->{-hashOut}->{$v};
+ }
  elsif ($ff->{dataType} eq 'enum') {
 	my $et =ref($ff->{'limit'}->{'enumLimits'}) eq 'ARRAY'
 		? $ff->{'limit'}->{'enumLimits'}
 		: exists $ff->{'limit'}->{'enumLimits'}->{'regularList'}
 		? $ff->{'limit'}->{'enumLimits'}->{'regularList'}
+		: exists $ff->{'limit'}->{'enumLimits'}->{'customList'}
+		? $ff->{'limit'}->{'enumLimits'}->{'customList'}
 		: undef;
-	$v =$et->[$v] if $et;
+	if (!$et) {}
+	elsif (!ref($et->[0])) {
+		$ff->{-hashOut} ={map {($_ => $et->[$_])} (0..$#$et)};
+		$v =strOut(@_);
+	}
+	elsif ((ref($et->[0]) eq 'HASH') && defined($et->[0]->{itemNumber})) {
+		$ff->{-hashOut} ={map {($et->[$_]->{itemNumber} => $et->[$_]->{itemName})} (0..$#$et)};
+		$v =strOut(@_);
+	}
+	else {
+		$et =undef
+	}
 	return(&{$s->{-die}}($s->cpcon(($s->{-cmd} ? $_[0]->{-cmd} .': ' : '') ."strOut('$f','" .$ff->{fieldName} ."', '$v') -> could not transate")))
 		if $et && !defined($v);
  }
@@ -736,24 +844,38 @@ sub strIn {	# Convert input field value, using '-meta'
  $ff =ref($ff) ? $ff : $ff =~/^\d+$/ ? $s->{-meta}->{$f}->{-fldids}->{$ff} : $s->{-meta}->{$f}->{-fields}->{$ff};
  if (!defined($v) ||!$ff ||!$s->{-strFields}) {
  }
+ elsif ($v =~/^\d+$/) {
+ }
+ elsif ($ff->{-hashIn}) {
+	return(&{$s->{-die}}($s->cpcon(($s->{-cmd} ? $s->{-cmd} .': ' : '') ."strIn('$f','" .$ff->{fieldName} ."', '$v') -> could not transate")))
+		if !exists($ff->{-hashIn}->{$v});
+	$v =$ff->{-hashIn}->{$v};
+ }
  elsif ($ff->{dataType} eq 'enum') {
-	my $et =ref($ff->{'limit'}->{'enumLimits'}) eq 'ARRAY'
+	my $et =  ref($ff->{'limit'}->{'enumLimits'}) eq 'ARRAY'
 		? $ff->{'limit'}->{'enumLimits'}
 		: exists $ff->{'limit'}->{'enumLimits'}->{'regularList'}
 		? $ff->{'limit'}->{'enumLimits'}->{'regularList'}
+		: exists $ff->{'limit'}->{'enumLimits'}->{'customList'}
+		? $ff->{'limit'}->{'enumLimits'}->{'customList'}
 		: undef;
-	if ($et) {
-		for(my $i=0; $i <=$#{$et}; $i++) {
-			if ($et->[$i] eq $v) {
-				$v =$i; last
-			}
-		}
+	if (!$et) {}
+	elsif (!ref($et->[0])) {
+		$ff->{-hashIn} ={map {($et->[$_] => $_)} (0..$#$et)};
+		$v =strIn(@_);
+	}
+	elsif ((ref($et->[0]) eq 'HASH') && defined($et->[0]->{itemNumber})) {
+		$ff->{-hashIn} ={map {($et->[$_]->{itemName} => $et->[$_]->{itemNumber})} (0..$#$et)};
+		$v =strIn(@_);
+	}
+	else {
+		$et =undef
 	}
 	return(&{$s->{-die}}($s->cpcon(($s->{-cmd} ? $s->{-cmd} .': ' : '') ."strIn('$f','" .$ff->{fieldName} ."', '$v') -> could not transate")))
 		if $et && ($v !~/^\d+$/);
  }
  elsif ($ff->{dataType} eq 'time') {
-	$v =timestr($s,$v) if $v !~/^\d+$/;
+	$v =timestr($s,$v);
  }
  $v
 }
@@ -763,13 +885,18 @@ sub lsflds {	# List fields from '-meta'
 		# (additional field options)
  my ($s, @a) =@_;
  @a =('fieldLblc', 'helpText') if !@a;
- unshift @a, 'fieldName', 'fieldId', 'dataType', 'createMode';
+ unshift @a, 'fieldName', 'fieldId', 'dataType', 'option', 'createMode';
  map {	my $f =$_;
 	$f =~/^-/
 	? ()
 	: map {	my $ff =$s->{-meta}->{$f}->{-fields}->{$_};
 		join("\t", $f
-			, (map {defined($ff->{$_}) ? $ff->{$_} : ''
+			, $ff->{option} && ($ff->{option} == 4) ? 'ro' : ()
+			, (map {!defined($ff->{$_})
+				? ''
+				: $_ eq 'option'
+				? (!$ff->{$_} ? '' : $ff->{$_} == 4 ? 'r' : $ff->{$_} == 2 ? 'o' : $ff->{$_} == 1 ? 'm' : '')
+				: $ff->{$_}
 				} @a[0..$#a-1])
 			, defined($ff->{$a[$#a]}) ? $ff->{$a[$#a]} : ())
 		} sort keys %{$s->{-meta}->{$f}->{-fields}}
@@ -1320,7 +1447,7 @@ sub dbiconnect {# DBI connect to any database
  set($_[0],-die=>'Carp') if !$_[0]->{-die};
  print $_[0]->cpcon("dbiconnect()\n")
 	if $_[0]->{-echo};
- eval('use DBI; 1') ||&{$_[0]->{-die}}('No DBI');
+ eval('use DBI; 1') ||return(&{$_[0]->{-die}}('No DBI'));
  $_[0]->{-dbi} =DBI->connect(ref($_[0]->{-dbiconnect}) ? @{$_[0]->{-dbiconnect}} : $_[0]->{-dbiconnect})
 	|| &{$_[0]->{-die}}($_[0]->cpcon('dbiconnect() -> ' .DBI->errstr));
 }
@@ -1413,6 +1540,38 @@ sub cgipar {	# CGI parameter
 }
 
 
+sub cgiurl {	# CGI script URL
+ local $^W =0;	# $ENV{PATH_INFO}
+ if ($#_ >0) {
+	my $v =($_[0]->{-cgi}||$_[0]->cgi)->url(@_[1..$#_]);
+	if ($v) {}
+	elsif (!($ENV{PERLXS} ||(($ENV{GATEWAY_INTERFACE}||'') =~/PerlEx/))) {}
+	elsif (($#_ >2) ||(($#_ ==2) && !$_[2])) {}
+	elsif ($_[1] eq '-relative') {
+		$v =$ENV{SCRIPT_NAME};
+		$v =$1 if $v =~/[\\\/]([^\\\/]+)$/;
+	}
+	elsif ($_[1] eq '-absolute') {
+		$v =$ENV{SCRIPT_NAME}
+	}
+	return($v)
+ }
+ else {	
+	# MSDN: "GetServerVariable (ISAPI Extensions)"
+	# ms-help://MS.MSDNQTR.v90.en/wcecomm5/html/wce50lrfGetServerVariableISAPIExtensions.htm
+	# http:// $ENV{HTTP_HOST} : $ENV{SERVER_PORT} / ($ENV{PATH_INFO} | $ENV{SCRIPT_NAME})
+	# + $ENV{QUERY_STRING}
+	my $v =($_[0]->{-cgi}||$_[0]->cgi)->url();
+	if ($ENV{PERLXS} ||(($ENV{GATEWAY_INTERFACE}||'') =~/PerlEx/)) {
+		$v .= (($v =~/\/$/) ||($ENV{SCRIPT_NAME} =~/^\//) ? '' : '/')
+			.$ENV{SCRIPT_NAME}
+			if ($v !~/\w\/\w/) && $ENV{SCRIPT_NAME};
+	}
+	return($v)
+ }
+}
+
+
 sub cgitext {	# CGI textarea field
  $_[0]->{-cgi}->textarea(@_[1..$#_])
 	# -default=>$v, -override=>1
@@ -1456,6 +1615,7 @@ sub cgiddlb {	# CGI drop-down listbox field composition
 		};
  my $ac=$a{-class} ? ' class="' .$a{-class} .'"' : '';
  my $as=$a{-style} ? ' style="' .$a{-style} .'"' : '';
+ my $aw=$a{-size} ||80;
  my $v =!defined($s->{-cgi}->param($n)) ||$a{-override}
 	? $a{-default}
 	: $s->{-cgi}->param($n);
@@ -1469,12 +1629,12 @@ sub cgiddlb {	# CGI drop-down listbox field composition
 	."if(l.style.display=='none'){"
 	.($_[0] eq '4' ? '' : 'return(true)') .'}else{'
 	.(!$_[0]	# onkeypess - input
-	? "k=window.document.forms[0].$n.value +String.fromCharCode($ek);"
+	? "if (String.fromCharCode($ek) ==\"\\r\") {${n}__S_.focus(); ${n}__S_.click(); return(true)}; k=window.document.forms[0].$n.value +String.fromCharCode($ek);"
 	: $_[0] eq '1'	# onkeypess - list -> input (first char)
-	? "window.document.forms[0].$n.focus(); k=window.document.forms[0].$n.value =String.fromCharCode($ek); "
+	? "if (String.fromCharCode($ek) ==\&quot;\\r\&quot;) {${n}__S_.focus(); ${n}__S_.click(); return(true)}; window.document.forms[0].$n.focus(); k=window.document.forms[0].$n.value =String.fromCharCode($ek); "
 	: $_[0] eq '2'	# onkeypess - list -> prompt (selected char)
 	# ? "k=prompt('Enter search string',String.fromCharCode($ek));"
-	? "k =String.fromCharCode($ek); for (var i=0; i <l.length; ++i) {if (l.options.item(i).value.toLowerCase().indexOf(k)==0 || l.options.item(i).text.toLowerCase().indexOf(k)==0){l.selectedIndex =i; break;}}; var q=prompt('Continue search string',''); k=q ? k +q : q; "
+	? "if (String.fromCharCode($ek) ==\&quot;\\r\&quot;) {${n}__S_.focus(); ${n}__S_.click(); return(true)}; k =String.fromCharCode($ek); for (var i=0; i <l.length; ++i) {if (l.options.item(i).value.toLowerCase().indexOf(k)==0 || l.options.item(i).text.toLowerCase().indexOf(k)==0){l.selectedIndex =i; break;}}; var q=prompt('Continue search string',''); k=q ? k +q : q; "
 	: $_[0] eq '3'	# button - '..'
 	? "k=prompt('Enter search substring',''); $nl.focus();"
 	: $_[0] eq '4'	# onload - document
@@ -1504,11 +1664,17 @@ sub cgiddlb {	# CGI drop-down listbox field composition
  ($s->{-cgi}->param("${n}__O_")
 	? "<div><script for=\"$n\" event=\"onkeypress\">" .&$fs(0) ."</script>\n"
 	: '')
- .$s->{-cgi}->textfield((map {defined($_) && defined($a{$_}) ? ($_ => $a{$_}) : ()
+ .$s->{-cgi}->textfield((map {defined($_) && defined($a{$_})
+				? ($_ => $a{$_})
+				: $a{-textfield} && $a{-textfield}->{$_} && !$s->{-cgi}->param("${n}__O_")
+				? ($_ => $a{-textfield}->{$_})
+				: ()
 		} qw(-name -title -class -style -size -maxlength))
 		, -default=>$v
 		, -override=>1
-		, ($a{-strict} && !$s->{-cgi}->param("${n}__O_") ? (-readonly=>1) : ())
+		, ($a{-strict} && !$s->{-cgi}->param("${n}__O_")
+			? (-readonly=>1) # ,-hidefocus=>0, -disabled=>0
+			: ())
 	)
  .($s->{-cgi}->param("${n}__O_")
 	? ("<input type=\"submit\" name=\"${n}__X_\" value=\"X\" title=\"close\"$ac$as />"
@@ -1522,7 +1688,14 @@ sub cgiddlb {	# CGI drop-down listbox field composition
 	  .join('',map {'<option'
 			.((defined($v) ? $v : '') eq (defined($_) ? $_ : '') ? ' selected' : '')
 			.' value="' .$s->{-cgi}->escapeHTML(defined($_) ? $_ : '') .'">' 
-				.$s->{-cgi}->escapeHTML(!defined($_) ? '' : !$a{-labels} ? $_ : defined($a{-labels}->{$_}) ? $a{-labels}->{$_} : '') ."</option>\n"
+				.$s->{-cgi}->escapeHTML(
+					!defined($_)
+					? ''
+					: !$a{-labels}
+					? (length($_) > $aw ? substr($_,0,$aw) .'...' : $_)
+					: defined($a{-labels}->{$_})
+					? (length($a{-labels}->{$_}) > $aw ? substr($a{-labels}->{$_},0,$aw) .'...' : $a{-labels}->{$_})
+					: '') ."</option>\n"
 			} @{&$av()})
 	  ."</select>\n"
 	  ."<input type=\"submit\" name=\"${n}__S_\" value=\"&lt;\" title=\"set\"$ac$as />"
@@ -1531,7 +1704,12 @@ sub cgiddlb {	# CGI drop-down listbox field composition
 	  ."</div>\n"
 	  ."<script for=\"window\" event=\"onload\">{window.document.forms[0].${n}__L_.focus()}</script>"
 		)
-	: ("<input type=\"submit\" name=\"${n}__O_\" value=\"...\" title=\"open\"$ac$as />"))
+	: ("<input type=\"submit\" name=\"${n}__O_\" value=\"...\" title=\"open\"$ac$as />"
+	 .($s->{-cgi}->param("${n}__C_") ||$s->{-cgi}->param("${n}__X_")
+		? "<script for=\"window\" event=\"onload\">{window.document.forms[0].${n}__O_.focus()}</script>"
+		: ''
+		))
+	)
 }
 
 
@@ -1541,11 +1719,11 @@ sub cgiesc {	# escape strings to html
 
 
 sub cgitfrm {	# table form layot
-		# -table=>{table attrs}, -tr=>{tr attrs}, -td=>{}, -th=>{}
+		# -form =>{form attrs}, -table=>{table attrs}, -tr=>{tr attrs}, -td=>{}, -th=>{}
  my ($s, %a) =$_[0];
  my $i =1;
  while (ref($_[$i]) ne 'ARRAY') {$a{$i} =$a{$i+1}; $i +=2};
- $s->cgi->start_form(-method=>'POST',-action=>'')
+ $s->cgi->start_form(-method=>'POST',-action=>'', $a{-form} ? %{$a{-form}} : ())
 	# ,-name=>'test'
  .$s->{-cgi}->table($a{-table} ? $a{-table} : (), "\n"
  .join(''
@@ -1646,17 +1824,134 @@ sub smtpsend {	# SMTP mail msg send
  }
  local $^W=undef;
  $s->smtp->mail($a{-sender} =~/<\s*([^<>]+)\s*>/ ? $1 : $a{-sender})
-	||return(&{$s->{-die}}("SMTP sender \'" .$a{-sender} ."'"));
+	||return(&{$s->{-die}}("SMTP sender \'" .$a{-sender} ."' -> " .($s->smtp->message()||'?')));
  $s->smtp->to(ref($a{-recipient})
-		? (map { $_ && /<\s*([^<>]+)\s*>/ ? $1 : $_ } @{$a{-recipient}})
-		: $a{-recipient})
-	||return(&{$s->{-die}}("SMTP recipient \'" 
-		.(ref($a{-recipient}) ? join(', ',$a{-recipient}) : $a{-recipient}) ."'"));
+		? (map { !$_ ? () : /<\s*([^<>]+)\s*>/ ? $1 : $_ } @{$a{-recipient}})
+		: $a{-recipient}, {'SkipBad'=>1}) # , {'SkipBad'=>1}
+	|| return(&{$s->{-die}}("SMTP recipient \'" 
+		.(ref($a{-recipient}) ? join(', ', (map { !$_ ? () : /<\s*([^<>]+)\s*>/ ? $1 : $_ } @{$a{-recipient}})) : $a{-recipient}) ."' -> " .($s->smtp->message()||'?')));
  $s->smtp->data($a{-data})
-	||return(&{$s->{-die}}("SMTP data '" .$a{-data} ."'"));
+	||return(&{$s->{-die}}("SMTP data '" .$a{-data} ."' -> " .($s->smtp->message()||'?')));
  my $r =$s->smtp->dataend()
-	||return(&{$s->{-die}}("SMTP dataend"));
+	||return(&{$s->{-die}}("SMTP dataend -> " .($s->smtp->message()||'?')));
  $r ||1;
+}
+
+
+sub soon {	# Periodical execution of this script
+		# (minutes, ?log file, ?run command, ?soon command)
+		# log file: empty || full file name || var file name
+		# run  command: empty || 'command line' || [command line] || sub{}
+		# soon command: empty || 'command line' || [command line]
+		# empty run command - only soon command will be scheduled
+		# empty soon command - sleep(minutes*60) will be used
+ my ($s, $mm, $lf, $cr, $cs) =@_;
+ $lf =$s->vfname($lf) if $lf && ($lf !~/[\\\/]/);
+ my $r =1;
+ if ($cs) {
+	my $qry =$cs;
+	if (ref($cs)) {
+		return(&{$s->{-die}}("soon() -> 'MSWin32' required for `at`\n"))
+			if $^O ne 'MSWin32';
+		$cs->[0] =Win32::GetFullPathName($cs->[0])
+			if ($^O eq 'MSWin32');
+		$cs->[0] = $cs->[0]=~/^(.+?)[^\\\/]+$/ ? $1 .'perl.exe' : $cs->[0]
+			if $cs->[0] =~/\.dll$/i;
+		for(my $i=1; $i <=$#$cs; $i++) {
+			next if $cs->[$i] =~/^-/;
+			$cs->[$i] =Win32::GetFullPathName($cs->[$i])
+				if ($^O eq 'MSWin32');
+			last;
+		}
+		$qry =join(' ', @$cs);
+	}
+	print "Starting '$qry'...\n";
+	$s->fstore(">>$lf", "\n" .$s->strtime() ."\tStarting '$qry'...\n")
+		if $lf;
+	foreach my $l (`at`) {
+		next if $l !~/\Q$qry\E[\w\d\s]*[\r\n]*$/i;
+		next if $l !~/(\d+)/;
+		my $v =$1;
+		my $cmd ="at $v /d";
+		print("$cmd $l\n");
+		$s->fstore(">>$lf", $s->strtime() ."\t$cmd $l\n")
+			if $lf;
+		system($cmd);
+	}
+ }
+ while (1) {
+	if (!$cr) {
+	}
+	elsif (ref($cr) eq 'CODE') {
+		local *OLDOUT;
+		local *OLDERR;
+		if ($lf) {
+			eval{fileno(STDOUT) && open(OLDOUT, '>&STDOUT')};
+			eval{fileno(STDERR) && open(OLDERR, '>&STDERR')};
+			open(STDOUT, ">>$lf");
+			open(STDERR, ">>$lf");
+		}
+		$r =&$cr(@_);
+		if ($lf) {
+			eval{fileno(OLDOUT) && close(STDOUT) && open(STDOUT, '>&OLDOUT')};
+			eval{fileno(OLDERR) && close(STDERR) && open(STDERR, '>&OLDERR')};
+		}
+	}
+	else {
+		my $cmd =$cr;
+		if (ref($cr) eq 'ARRAY') {
+			$cr->[0] =Win32::GetFullPathName($cr->[0])
+				if ($^O eq 'MSWin32');
+			$cr->[0] = $cr->[0]=~/^(.+?)[^\\\/]+$/ ? $1 .'perl.exe' : $cr->[0]
+				if $cr->[0] =~/\.dll$/i;
+			for(my $i=1; $i <=$#$cr; $i++) {
+				next if $cr->[$i] =~/^-/;
+				$cr->[$i] =Win32::GetFullPathName($cr->[$i])
+					if ($^O eq 'MSWin32');
+				last;
+			}
+			$cmd =join(' ', @$cr);
+		}
+		if ($lf) {
+			$cmd ="$cmd >>$lf 2>>\&1";
+			print(($cs ? '' : "\n") ."$cmd\n");
+			$s->fstore(">>$lf", ($cs ? '' : "\n") .$s->strtime() ."\t$cmd\n");
+			if (system($cmd) <0) {
+				$r =0;
+				print("Error $!\n");
+				$s->fstore(">>$lf", $s->strtime() ."\t$!\n");
+			}
+		}
+		else {
+			print(($cs ? '' : "\n") ."$cmd\n");
+			if (system(ref($cr) ? @$cr : $cr) <0) {
+				$r =0;
+				print("Error $!\n");
+			}
+		}
+
+
+	}
+	last if $cs;
+	print "sleep($mm)...\n";
+	$s->fstore(">>$lf", $s->strtime() ."\tsleep($mm)...\n")
+		if $lf;
+	sleep($mm *60);
+ }
+ if ($cs) {
+	my $t1 =$s->strtime($s->timeadd(time(),0,0,0,0, $mm));
+	$t1 =$1 if $t1 =~/\s([^\s]+)/;
+	my $cmd ="at $t1 /interactive " .(ref($cs) ? join(' ', @$cs) : $cs);
+	print("$cmd\n");
+	$s->fstore(">>$lf", $s->strtime() ."\t$cmd\n")
+		if $lf;
+	if (system($cmd) <0) {
+		print("Error $!\n");
+		$s->fstore(">>$lf", $s->strtime() ."\t$!\n")
+			if $lf;
+	}
+ }
+ $r
 }
 
 

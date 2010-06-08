@@ -97,7 +97,7 @@ C<dbiconnect>(C<-dbiconnect>); C<-dbi>
 =item Metadata
 
 C<connect>;
-C<-schema>, C<-meta>, C<-metax>, C<-metadn>, C<-metaid>, C<-schgen>, C<-strFields>;
+C<-schema>, C<-meta>, C<-metax>, C<-metadn>, C<-metaid>, C<-schgen>, C<-schfdo>, C<-strFields>;
 C<Variable files>; C<lsflds>
 
 
@@ -105,7 +105,7 @@ C<Variable files>; C<lsflds>
 =item Variable files
 
 C<-vfbase>, C<-storable>;
-C<vfname>, C<vfload>, C<vfstore>, C<vfdata>, C<vfhash>, C<vfdistinct>
+C<vfname>, C<vfload>, C<vfstore>, C<vfclear>, C<vfdata>, C<vfhash>, C<vfdistinct>
 
 
 =item ARS methods
@@ -130,9 +130,11 @@ C<strtime>, C<timestr>, C<timeadd>;
 
 C<dsquot>, C<dsquot1>;
 
-C<dsdump>, C<dsparse>, C<dscmp>, C<dsunique>;
+C<dsdump>, C<dsparse>, C<dscmp>, C<dsmerge>, C<dsunique>;
 
-C<fload>, C<fstore>
+C<fload>, C<fstore>;
+
+C<soon>
 
 
 
@@ -309,6 +311,15 @@ ARS password string to login with
 ARS forms or schemas to use.
 Metadata will be loaded to C<-meta> and may be cached with C<vfname>(C<-meta>)
 if C<-schgen>.
+
+
+=item -schfdo
+
+	=> 0 || 1
+
+(C<Metadata>)
+Include display only fields (AR_FIELD_OPTION_DISPLAY) into schema.
+
 
 
 =item C<-schgen> 
@@ -584,6 +595,15 @@ This string may be loaded back with C<dsparse>().
 
 
 
+=item dsmerge (array ref,...) -> [merged array]
+
+=item dsmerge (hash ref,...) -> {merged hash}
+
+(C<Utility Methods>)
+Sequentally assign elements of data structures given to result data structure.
+
+
+
 =item dsparse (perl string) -> data structure
 
 (C<Utility Methods>)
@@ -820,6 +840,19 @@ Send L<Net::SMTP|Net/SMTP> e-mail using C<smtp>.
 
 
 
+=item soon (minutes, logfile ||'', run command || [command line] || sub{}, soon command || [command line])
+
+=item soon (minutes, logfile ||'', run command || [command line] || sub{})
+
+=item soon (minutes, logfile ||'', '', soon command || [command line])
+
+Execute the script periodically, run command immediately, soon command after delay specified.
+Log file name may be full file name, else C<vfname>(file name) will be used.
+If run command is empty, soon command will be scheduled.
+If soon command is empty, sleep(minutes*60) will be used, otherwise 'at' MSWin32 scheduling command.
+
+
+
 =item strIn (schema, fieldId | fieldName | field metadata, value) -> converted
 
 (C<ARS methods>)
@@ -876,6 +909,14 @@ with L<POSIX::mktime|POSIX>
 
 
 
+=item vfclear (-slotName) -> true
+
+(C<Variable files>)
+Clear data loaded from variables file by C<vfload>(-slotName).
+Reset data buffers of C<vfdata>() and C<vfhash>().
+
+
+
 =item vfdata (-slotName) -> data structure
 
 =item vfdata (-slotName, index) -> numbered element of data array
@@ -904,6 +945,8 @@ Each element of C<vfdata>(-slotName) should be a hash with 'keyName' element.
 
 =item vfhash (-slotName, keyName, keyValue) -> {key => value}
 
+=item vfhash (-slotName, keyName, keyValue, key) -> value || undef if !ref(keyValue)
+
 =item vfhash (-slotName, keyName, filter sub{}(self, -slot, keyName, keyValue, $_=elem)) -> {keyName=>{key => value},...}
 
 (C<Variable files>)
@@ -915,8 +958,12 @@ C<vfdata> array will be automatically cached into hash "-slotName/keyName".
 
 =item vfload (partial file name || -slotName) -> data structure
 
+=item vfload (-slotName, ?create, ?renew ||renew period seconds) -> data structure
+
 (C<Variable files>)
 Load data structure from variables file using C<fload> and C<-storable>/C<dsparse>.
+File absent may be created. 
+File existed may be renewed immediatelly or if it is older then renew period.
 
 If '-slotName' specified, this slot will contain loaded data structure.
 
@@ -932,6 +979,15 @@ data will be calculated on demand.
 (C<Variable files>)
 Convert partial file name to full, based on C<-vfbase>, for variables file.
 Leading '-' will be excluded.
+
+
+
+=item vfrenew (-slotName, ?renew period seconds) -> vfstore()/vfload()
+
+(C<Variable files>)
+Renew variables file using C<vfstore>() inside C<vfload>() with '-slotName-load' sub{}.
+If no period or when period ==1 file will be renewed immediatelly.
+Else file will be renewed only if it is older then period.
 
 
 
@@ -953,6 +1009,12 @@ If '-slotName' specified, this slot should contain data structure to be stored.
 =head1 VERSION
 
 =over
+
+
+=head2 2010-06-08
+
+Publishing 0.51 version, with several changes, enhancements and corrections.
+
 
 
 =head2 2010-04-17
