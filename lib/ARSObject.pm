@@ -2,8 +2,8 @@
 #
 # High level interface above ARS module
 #
-# makarow, 2010-03-02
-# K)
+# Andrew V Makarow, 2010-03-02, K)
+#
 #
 # 2010-03-24 detached
 # 2010-03-02 started inside a script
@@ -14,7 +14,7 @@ use UNIVERSAL;
 use strict;
 use POSIX;
 
-$VERSION = '0.51';
+$VERSION = '0.52';
 
 1;
 
@@ -1609,9 +1609,28 @@ sub cgiddlb {	# CGI drop-down listbox field composition
  my $nl="${n}__L_";
  my $av=sub{	return($a{-values}) if $a{-values};
 		use locale;
-		$a{-values} =[sort {(defined($a{-labels}->{$a}) ? $a{-labels}->{$a} : '') 
-			cmp (defined($a{-labels}->{$b})	? $a{-labels}->{$b} : '')
-				} keys %{$a{-labels}}]
+		$a{-values} =[
+			  $a{-labels0}
+			? sort {(defined($a{-labels0}->{$a}) ? $a{-labels0}->{$a} : '') 
+			cmp (defined($a{-labels0}->{$b}) ? $a{-labels0}->{$b} : '')
+				} keys %{$a{-labels0}}
+			: ()
+			, (sort {(defined($a{-labels}->{$a}) ? $a{-labels}->{$a} : '') 
+			cmp (defined($a{-labels}->{$b}) ? $a{-labels}->{$b} : '')
+				} keys %{$a{-labels}})
+			, $a{-labels1}
+			? sort {(defined($a{-labels1}->{$a}) ? $a{-labels1}->{$a} : '') 
+			cmp (defined($a{-labels1}->{$b}) ? $a{-labels1}->{$b} : '')
+				} keys %{$a{-labels1}}
+			: ()
+				];
+		foreach my $e ('-labels0','-labels1') {
+			next if !$a{$e};
+			foreach my $k (keys %{$a{$e}}) {
+				$a{-labels}->{$k} =$a{$e}->{$k}
+			}
+		}
+		$a{-values}
 		};
  my $ac=$a{-class} ? ' class="' .$a{-class} .'"' : '';
  my $as=$a{-style} ? ' style="' .$a{-style} .'"' : '';

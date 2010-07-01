@@ -1011,6 +1011,12 @@ If '-slotName' specified, this slot should contain data structure to be stored.
 =over
 
 
+=head2 2010-07-01
+
+Publishing 0.52 version, with several enhancements and corrections.
+
+
+
 =head2 2010-06-08
 
 Publishing 0.51 version, with several changes, enhancements and corrections.
