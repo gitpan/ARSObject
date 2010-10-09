@@ -784,6 +784,9 @@ Parameters:
 -fields => [fieldId | fieldName,...]
 # result set is hash refs for each record, ARS::ars_GetListEntryWithFields() used.
 
+-fields => '*' | 1
+# result set is hash refs for each record, ARS::ars_GetListEntryWithFields() used.
+
 -fetch => '*' | 1 | [fieldId|fieldName,...]
 # result set is hash refs for each record, ars_GetEntry() used for each row, this is slow.
 
@@ -967,10 +970,12 @@ File existed may be renewed immediatelly or if it is older then renew period.
 
 If '-slotName' specified, this slot will contain loaded data structure.
 
-If '-slotName-load' => sub{}(self, -slotName) specified, it will be used to fill unexisted file.
-
 If '-slotName-calc' => sub{}(self, -slotName) specified, file will not be used at all, 
 data will be calculated on demand.
+
+If '-slotName-load' => sub{}(self, -slotName) specified, it will be used to fill unexisted file.
+
+If '-slotName-storable' => switch specified, it will be used instead of C<-storable>.
 
 
 
@@ -998,7 +1003,7 @@ Else file will be renewed only if it is older then period.
 (C<Variable files>)
 Store data to variables file using C<-storable>/C<dsdump> and C<fstore>.
 If '-slotName' specified, this slot should contain data structure to be stored.
-
+See also C<-vfload> for '-slotName-storable' switch.
 
 
 
@@ -1009,6 +1014,24 @@ If '-slotName' specified, this slot should contain data structure to be stored.
 =head1 VERSION
 
 =over
+
+
+=head2 2010-10-09
+
+Publishing 0.53 version, with several enhancements and corrections.
+
+
+
+=head2 2010-08-25
+
+C<strOut>() method may return original enum value when cannot translate it.
+
+C<vfstore>()/C<vfload>() extended with '-slotName-storable' switch.
+
+
+=head2 2010-08-20
+
+C<query>(...,-fields=>'*',...) syntax added.
 
 
 =head2 2010-07-01

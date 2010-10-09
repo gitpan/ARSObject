@@ -14,7 +14,7 @@ use UNIVERSAL;
 use strict;
 use POSIX;
 
-$VERSION = '0.52';
+$VERSION = '0.53';
 
 1;
 
@@ -32,7 +32,7 @@ sub new {	# New ARS object
 			(do{	my $v =$^O eq 'MSWin32' ? scalar(Win32::GetFullPathName($0)) : $0;
 				$v =~/^(.+?)\.[^\\\/]*$/ ? "$1-" : "$v-"
 			})
-	,-storable =>undef	# Use Storable module for cache files?
+	#,-storable =>undef	# Use Storable module for cache files?
 	,-schgen => 1		# 1 - use vfname('meta') for '-meta', generate it from ARS if not exists.
 				# 2 - renewable 'meta' (reserved)
 	,-schfdo => 0		# Include display only fields into schema (AR_FIELD_OPTION_DISPLAY)
@@ -66,7 +66,7 @@ sub new {	# New ARS object
 	};
  bless $s,$c;
  set($s, @_);
- $s->{-storable} =eval('use Storable; 1') if !defined($s->{-storable});
+ $s->{-storable} =eval('use Storable; 1') if !exists($s->{-storable});
  $s
 }
 
@@ -373,8 +373,10 @@ sub vfstore {		# Store variables file
  my($s,$n,$d)=@_;
  $d =$s->{$n} if !$d && ($n =~/^-/);
  my $f =$s->vfname($n, '.new');
- my $r = $s->{-storable}
- ? Storable::store($d, $f)
+ my $r = 
+ (($n =~/^-/) && exists($s->{"${n}-storable"}) ? $s->{"${n}-storable"} : $s->{-storable})
+ ? eval("use Storable; 1")
+	&& Storable::store($d, $f)
 	|| return(&{$s->{-die}}($s->cpcon(($s->{-cmd} ? $s->{-cmd} .': ' : '')
 		."Storable::store('$f') -> $!")))
  : $s->fstore('-', $f, $s->dsdump($d));
@@ -421,8 +423,9 @@ sub vfload {		# Load variables file
 	$s->{$k} =$d =&$cc($s,$k);
 	return($d);
  }
- my $r =$s->{-storable}
-	? Storable::retrieve($f)
+ my $r =($k && exists($s->{"${k}-storable"}) ? $s->{"${k}-storable"} : $s->{-storable})
+	? eval("use Storable; 1")
+		&& Storable::retrieve($f)
 		|| return(&{$s->{-die}}($s->cpcon(($s->{-cmd} ? $s->{-cmd} .': ' : '')
 			."Storable::retrieve('$f') -> $!")))
 	: $s->dsparse($s->fload('-', $f));
@@ -804,9 +807,12 @@ sub strOut {	# Convert field value for output, using '-meta'
  if (!defined($v) ||!$ff ||!$s->{-strFields}) {
  }
  elsif ($ff->{-hashOut}) {
-	return(&{$s->{-die}}($s->cpcon(($s->{-cmd} ? $_[0]->{-cmd} .': ' : '') ."strOut('$f','" .$ff->{fieldName} ."', '$v') -> could not transate")))
-		if !exists($ff->{-hashOut}->{$v});
-	$v =$ff->{-hashOut}->{$v};
+	if (exists($ff->{-hashOut}->{$v})) {
+		$v =$ff->{-hashOut}->{$v}
+	}
+	else {
+		# return(&{$s->{-die}}($s->cpcon(($s->{-cmd} ? $_[0]->{-cmd} .': ' : '') ."strOut('$f','" .$ff->{fieldName} ."', '$v') -> could not transate")))
+	}
  }
  elsif ($ff->{dataType} eq 'enum') {
 	my $et =ref($ff->{'limit'}->{'enumLimits'}) eq 'ARRAY'
@@ -847,9 +853,12 @@ sub strIn {	# Convert input field value, using '-meta'
  elsif ($v =~/^\d+$/) {
  }
  elsif ($ff->{-hashIn}) {
-	return(&{$s->{-die}}($s->cpcon(($s->{-cmd} ? $s->{-cmd} .': ' : '') ."strIn('$f','" .$ff->{fieldName} ."', '$v') -> could not transate")))
-		if !exists($ff->{-hashIn}->{$v});
-	$v =$ff->{-hashIn}->{$v};
+	if (exists($ff->{-hashIn}->{$v})) {
+		$v =$ff->{-hashIn}->{$v};
+	}
+	else {
+		return(&{$s->{-die}}($s->cpcon(($s->{-cmd} ? $s->{-cmd} .': ' : '') ."strIn('$f','" .$ff->{fieldName} ."', '$v') -> could not transate")))
+	}
  }
  elsif ($ff->{dataType} eq 'enum') {
 	my $et =  ref($ff->{'limit'}->{'enumLimits'}) eq 'ARRAY'
@@ -920,6 +929,7 @@ sub query {	# ars_GetListEntry / ars_LoadQualifier
  #		,[{fieldName=>name, width=>9},...
  #		,[{field=>name|id, width=>9},...] # 128 bytes limit strings
  # ||-fields => [fieldId | fieldName,...]	# using ars_GetListEntryWithFields()
+ # ||-fields => '*' | 1
  # ||-fetch => '*' | 1 | [fieldId|fieldName,...] # using ars_GetEntry() for each record
  # -order ||-sort => [fieldId, (1||2),...] # 1 - asc, 2 - desc
  #			[..., fieldName, field=>'desc', field=>'asc',...]
@@ -943,12 +953,21 @@ sub query {	# ars_GetListEntry / ars_LoadQualifier
  my $f =$a{-schema} ||$a{-form} ||$a{-from};
  my $c =$a{-for} ||$a{-foreach};
 
- $a{-fetch} =1 if $a{-fields} && !ref($a{-fields});
- delete $a{-fields} if $a{-fetch};
+ $a{-fields} =[map {  my $ff =$s->{-meta}->{$f}->{-fields}->{$_};
+		!$ff->{dataType} || !$ff->{fieldId}
+		|| ($ff->{dataType} =~/^(trim|control|table|column|page|attach)/)
+		|| ($ff->{fieldId} eq '15') # 'Status-History' # ars_GetListEntryWithFields() -> [ERROR] (ORA-00904: "C15": invalid identifier) (ARERR #552)
+		? ()
+		: ($ff->{fieldId})
+		} sort keys %{$s->{-meta}->{$f}->{-fields}}]
+		if $a{-fields} && !ref($a{-fields});
+ $a{-fetch} =1	if $a{-fields} && !ref($a{-fields});
+ delete $a{-fields}	if $a{-fetch};
 
  local $s->{-cmd} ="query(" .join(', ',map {!defined($a{$_}) ? () : ref($a{$_}) ? "$_=>" .dsquot($s,$a{$_}) : ("$_=>" .strquot($s,$a{$_}))
 		} qw(-schema -form -from -fields -fetch -qual -query -where -sort -order -limit -max -maxRetrieve -first -start))
 		.")";
+
  my $fl = ref($a{-fetch})
 	? [map {/^\d+$/ ? $_ : schdn($s,$f,$_)->{fieldId}} @{$a{-fetch}}]
 	: $a{-fields} && ref($a{-fields}->[0])
@@ -985,7 +1004,7 @@ sub query {	# ars_GetListEntry / ars_LoadQualifier
  $q =ARS::ars_LoadQualifier($s->{-ctrl}, $f, $q);
  return(&{$s->{-die}}($s->cpcon($s->{-cmd} ." -> $ARS::ars_errstr")))
 	if !$q;
- $s->{-cmd} .=": qual". $s->dsquot(ARS::ars_perl_qualifier($s->{-ctrl}, $q));
+#$s->{-cmd} .=": qual". $s->dsquot(ARS::ars_perl_qualifier($s->{-ctrl}, $q));
 
  print $s->cpcon(join(";\n", split /\):\s/, $s->{-cmd})), "\n"
 	if $s->{-echo} ||$a{-echo};
@@ -1741,7 +1760,7 @@ sub cgitfrm {	# table form layot
 		# -form =>{form attrs}, -table=>{table attrs}, -tr=>{tr attrs}, -td=>{}, -th=>{}
  my ($s, %a) =$_[0];
  my $i =1;
- while (ref($_[$i]) ne 'ARRAY') {$a{$i} =$a{$i+1}; $i +=2};
+ while (ref($_[$i]) ne 'ARRAY') {$a{$_[$i]} =$_[$i+1]; $i +=2};
  $s->cgi->start_form(-method=>'POST',-action=>'', $a{-form} ? %{$a{-form}} : ())
 	# ,-name=>'test'
  .$s->{-cgi}->table($a{-table} ? $a{-table} : (), "\n"
