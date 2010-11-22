@@ -132,7 +132,7 @@ C<dsquot>, C<dsquot1>;
 
 C<dsdump>, C<dsparse>, C<dscmp>, C<dsmerge>, C<dsunique>;
 
-C<fload>, C<fstore>;
+C<fopen>, C<fload>, C<fstore>, C<fdirls>;
 
 C<soon>
 
@@ -204,16 +204,23 @@ See also C<dbi> and C<dbiconnect> methods.
 
 	=> undef || sub{}
 
-	=> set(-die => 'Carp' || 'CGI::Carp' || 'CGI::Carp qw(fatalsToBrowser warningsToBrowser)')
+	=> set(-die => 'Carp' || 'CGI::Carp' || 'CGI::Carp qw(fatalsToBrowser warningsToBrowser)' || 'CGI::Die')
 
 (C<Error Processing and Echo>)
 Error die sub{}.
 The most C<Methods> dies when error.
 Call C<set>(C<-die> => 'Carp') to use L<Carp|Carp> module.
-Call C<set>(C<-die> => 'CGI::Carp fatalsToBrowser') to use L<CGI::Carp|CGI/Carp> module;
-L<CGI::Carp|CGI/Carp>::set_message() may be used also.
+Call C<set>(C<-die> => 'CGI::Carp fatalsToBrowser') to use L<CGI::Carp|CGI/Carp> module.
 
-See also C<-warn>, C<-cpcon>
+See also C<-diemsg>, C<-warn>, C<-cpcon>
+
+
+=item -diemsg
+
+	=> undef || sub{}(string)
+
+Message for C<-die>, alike L<CGI::Carp|CGI/Carp>::set_message()
+
 
 
 =item -echo
@@ -354,11 +361,17 @@ See also C<smtp> and C<smtpconnect> methods.
 
 =item -storable
 
+=item -meta-storable
+
+=item <-vfname>-storable
+
 	=> 1 || 0
 
 (C<Variable files>)
-Use L<Storable|Storable> module for variable files?
+Use L<Storable|Storable> module for variable files, metadata file, or another particular file?
 Or L<Data::Dumper|Data/Dumper> will be used.
+See also C<vstore>().
+
 
 
 =item -srv
@@ -406,6 +419,13 @@ Call C<set>(C<-die> => 'Carp') to use L<Carp|Carp> module,
 or C<set>(C<-die> => 'CGI::Carp') to use L<CGI::Carp|CGI/Carp> module.
 See also C<-cpcon>.
 
+
+
+=item -warnmsg
+
+	=> undef || sub{}(string)
+
+Message for C<-warn>, alike C<-diemsg>.
 
 
 
@@ -718,6 +738,15 @@ field === internalId | fieldName
 
 
 
+=item fdirls (?-opt, path, ? filter sub{}(self, path, $_ =entry)) -> (entry,...)
+
+=item fdirls (..., []) -> [entry,...]
+
+(C<Utility Methods>)
+List directory contents.
+
+
+
 =item fload (?-opt, filename) -> content
 
 (C<Utility Methods>)
@@ -725,6 +754,14 @@ Load data from file.
 Options: '-b' - L<binmode|perlfunc>.
 See also C<fstore>.
 
+
+
+=item fopen (?-opt, filename) -> IO::File object
+
+(C<Utility Methods>)
+Open file with L<IO::File|IO/File> object.
+Options: '-b' - L<binmode|perlfunc>.
+See also C<fload>, C<fstore>.
 
 
 
@@ -784,8 +821,9 @@ Parameters:
 -fields => [fieldId | fieldName,...]
 # result set is hash refs for each record, ARS::ars_GetListEntryWithFields() used.
 
--fields => '*' | 1
+-fields => '*' | '*-$' | 1
 # result set is hash refs for each record, ARS::ars_GetListEntryWithFields() used.
+# use '*-$' to excude currency fields.
 
 -fetch => '*' | 1 | [fieldId|fieldName,...]
 # result set is hash refs for each record, ars_GetEntry() used for each row, this is slow.
@@ -975,8 +1013,6 @@ data will be calculated on demand.
 
 If '-slotName-load' => sub{}(self, -slotName) specified, it will be used to fill unexisted file.
 
-If '-slotName-storable' => switch specified, it will be used instead of C<-storable>.
-
 
 
 =item vfname (partial name || -slotName) -> full var file path name in the filesystem
@@ -1002,8 +1038,10 @@ Else file will be renewed only if it is older then period.
 
 (C<Variable files>)
 Store data to variables file using C<-storable>/C<dsdump> and C<fstore>.
+
 If '-slotName' specified, this slot should contain data structure to be stored.
-See also C<-vfload> for '-slotName-storable' switch.
+
+If '-slotName-storable' => switch specified, it will be used instead of C<-storable>.
 
 
 
@@ -1014,6 +1052,16 @@ See also C<-vfload> for '-slotName-storable' switch.
 =head1 VERSION
 
 =over
+
+
+=head2 2010-11-22
+
+Publishing 0.54 version, with several enhancements and corrections.
+
+New C<-diemsg>, C<-warnmsg>, C<fdirls>().
+
+C<vfload> - increased performance of loading text file,
+implemented tet/binary format autodetection.
 
 
 =head2 2010-10-09

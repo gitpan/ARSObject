@@ -12,9 +12,9 @@ package ARSObject;
 use vars qw($VERSION @ISA $AUTOLOAD);
 use UNIVERSAL;
 use strict;
-use POSIX;
+use POSIX qw(:fcntl_h);
 
-$VERSION = '0.53';
+$VERSION = '0.54';
 
 1;
 
@@ -55,7 +55,9 @@ sub new {	# New ARS object
 	,-strFields => 1	# Translate fields data using 'strIn'/'strOut'/'-meta'?
 	,-cmd =>''		# Command running, for err messages, script local $s->{-cmd}
 	,-die =>undef		# Error die/warn,  'Carp' or 'CGI::Carp...'
+	# ,-diemsg => undef	#
 	,-warn=>undef		# , see set() and connect() below
+	# ,-warnmsg => undef	#
 	,-cpcon=>undef		# Translation to console codepage sub{}(self, args) -> translated
 	,-echo=>0		# Echo printout switch
 	,-dbi=>undef		# DBI object, by dbiconnect()
@@ -72,6 +74,14 @@ sub new {	# New ARS object
 
 
 sub DESTROY {
+	my $s =shift;
+	$s->{-die} =undef;
+	$s->{-warn}=undef;
+	$s->{-ctrl}=undef;
+	$s->{-dbi} =undef;
+	$s->{-cgi} =undef;
+	$s->{-diemsg}  =undef;
+	$s->{-warnmsg} =undef;
 }
 
 
@@ -95,6 +105,46 @@ sub set {	# Set/Get parameters
 		eval('use ' .$a{-die} .';');
 		$s->{-die} =\&CGI::Carp::confess;
 		$s->{-warn}=\&CGI::Carp::carp;
+		$s->{-diemsg} && CGI::Carp::set_message($s->{-diemsg});
+	}
+	elsif ($a{-die} =~/^CGI::Die/) {
+		eval('use Carp;');
+		$s->{-die} =\&Carp::confess;
+		$s->{-warn}=\&Carp::carp;
+		my $sigdie =$SIG{__DIE__};
+		$SIG{__DIE__} =sub{
+			return if ineval();
+			if ($s && $s->{-diemsg}) {
+				&{$s->{-diemsg}}(@_)
+			}
+			else {
+				print   $s->{-cgi}->header(-content=>'text/html'
+					,($ENV{SERVER_SOFTWARE}||'') =~/IIS/ ? (-nph=>1) : ()
+					)
+					, "<h1>Error:</h1>"
+					, $s->{-cgi}->escapeHTML($_[0])
+					, "<br />\n"
+					if $s && $s->{-cgi}
+			}
+			$s->DESTROY() if $s;
+			$s =undef;
+			# $SIG{__DIE__} =$sigdie;
+			# &$sigdie(@_) if ref($sigdie) eq 'CODE';
+			# CORE::die($_[0]);
+		};
+		$SIG{__WARN__} =sub{
+			return if !$^W ||ineval();
+			if ($s && $s->{-warnmsg}) {
+				&{$s->{-warnmsg}}(@_)
+			}
+			else {
+				print   '<div style="font-weight: bolder">Warnig: '
+					, $s->{-cgi}->escapeHTML($_[0])
+					, "<div>\n"
+					if $s && $s->{-cgi}
+			}
+			# CORE::warn($_[0]);
+		} if $^W;
 	}
  }
  elsif ($a{-vfbase}) {
@@ -104,6 +154,22 @@ sub set {	# Set/Get parameters
 	}
  }
  $s
+}
+
+
+sub ineval {	# is inside eval{}?
+		# for PerlEx and mod_perl
+		# see CGI::Carp::ineval comments and errors
+ return $^S	if !($ENV{GATEWAY_INTERFACE}
+			&& ($ENV{GATEWAY_INTERFACE} =~/PerlEx/))
+		&& !$ENV{MOD_PERL};
+ my ($i, @a) =(1);
+ while (@a =caller($i)) {
+	return(0) if $a[0] =~/^(?:PerlEx::|Apache::Perl|Apache::Registry|Apache::ROOT)/i;
+	return(1) if $a[3] eq '(eval)';
+	$i +=1;
+ }
+ $^S
 }
 
 
@@ -172,8 +238,8 @@ sub dsdump {     # Data structure dump to string
 
 sub dsparse {  # Data structure dump string to perl structure
  my ($s, $d) =@_;	# (string) -> data structure
- eval('use Safe');
- Safe->new()->reval($d)
+ eval('use Safe; 1')
+ && Safe->new()->reval($d)
 }
 
 
@@ -321,6 +387,42 @@ sub sfpath {		# self file path
 }
 
 
+
+sub fopen {		# Open file
+ my $s =shift;		# ('-b',filename) -> success
+ my $o =$_[0] =~/^-(?:\w[\w\d+-]*)*$/ ? shift : '-';
+ my $f =$_[0]; $f ='<' .$f if $f !~/^[<>]/;
+ eval('use IO::File');
+ my $h =IO::File->new($f) || return(&{$s->{-die}}($s->cpcon("fopen('$f'): cannot open: $!")));
+ $h->binmode() if $h && ($o =~/b/);
+ $h
+}
+
+
+sub fdirls {		# Directory listing
+ my $s =shift;		# ('-',pathname, ?filter sub{}(self, path, $_=entry), ? []) -> (list) || [list]
+ my $o =$_[0] =~/^-(?:\w[\w\d+-]*)*$/ ? shift : '-';
+ my ($f, $cf, $cs) =@_;
+ local *FILE; opendir(FILE, $f) || return(&{$s->{-die}}($s->cpcon("ls('$f'): cannot open: $!")));
+ local $_;
+ my ($r, @r);
+ if ($cs) {
+	while (defined($r =readdir(FILE))) {
+		push @$cs, $r if !$cf ||&$cf($s,$f,$_ =$r)
+	}
+	closedir(FILE);
+	return $cs;
+ }
+ else {
+	while (defined($r =readdir(FILE))) {
+		push @r, $r if !$cf ||&$cf($s,$f,$_ =$r)
+	}
+	closedir(FILE);
+	return @r;
+ }
+}
+
+
 sub fstore {		# Store file
  my $s =shift;		# ('-b',filename, strings) -> success
  my $o =$_[0] =~/^-(?:\w[\w\d+-]*)*$/ ? shift : '-';
@@ -423,12 +525,38 @@ sub vfload {		# Load variables file
 	$s->{$k} =$d =&$cc($s,$k);
 	return($d);
  }
- my $r =($k && exists($s->{"${k}-storable"}) ? $s->{"${k}-storable"} : $s->{-storable})
+ my $r;
+ if (0) {
+	$r =($k && exists($s->{"${k}-storable"}) ? $s->{"${k}-storable"} : $s->{-storable})
 	? eval("use Storable; 1")
 		&& Storable::retrieve($f)
 		|| return(&{$s->{-die}}($s->cpcon(($s->{-cmd} ? $s->{-cmd} .': ' : '')
 			."Storable::retrieve('$f') -> $!")))
-	: $s->dsparse($s->fload('-', $f));
+	: ((eval{do($f)}) || return(&{$s->{-die}}($s->cpcon(($s->{-cmd} ? $s->{-cmd} .': ' : '')
+			."do('$f') -> $@"))));
+ }
+ else {
+	local *FILE; 
+	open(FILE, "<$f") || return(&{$s->{-die}}($s->cpcon("vfload('$f'): cannot open: $!")));
+	binmode(FILE);
+	my $v;
+	sysread(FILE,$v,64,0)
+		||return(&{$s->{-die}}($s->cpcon(($s->{-cmd} ? $s->{-cmd} .': ' : '')
+			."sysread('$f') -> $!")));
+	$r =($v 
+		? $v !~/^\$VAR1\s*=/
+		: ($k && exists($s->{"${k}-storable"}) ? $s->{"${k}-storable"} : $s->{-storable}))
+	? ((seek(FILE,0,0) ||1)
+		&& eval("use Storable; 1")
+		&& Storable::fd_retrieve(\*FILE)
+		|| return(&{$s->{-die}}($s->cpcon(($s->{-cmd} ? $s->{-cmd} .': ' : '')
+			."Storable::retrieve('$f') -> $!"))))
+	: ((eval{close(FILE);
+		do($f)}) || return(&{$s->{-die}}($s->cpcon(($s->{-cmd} ? $s->{-cmd} .': ' : '')
+			."do('$f') -> $@")))
+		);
+	eval{close(FILE)};
+ }
  $s->{$k} =$r if $k;
  $r
 }
@@ -929,7 +1057,7 @@ sub query {	# ars_GetListEntry / ars_LoadQualifier
  #		,[{fieldName=>name, width=>9},...
  #		,[{field=>name|id, width=>9},...] # 128 bytes limit strings
  # ||-fields => [fieldId | fieldName,...]	# using ars_GetListEntryWithFields()
- # ||-fields => '*' | 1
+ # ||-fields => '*' | 1 | '*-$'
  # ||-fetch => '*' | 1 | [fieldId|fieldName,...] # using ars_GetEntry() for each record
  # -order ||-sort => [fieldId, (1||2),...] # 1 - asc, 2 - desc
  #			[..., fieldName, field=>'desc', field=>'asc',...]
@@ -953,14 +1081,23 @@ sub query {	# ars_GetListEntry / ars_LoadQualifier
  my $f =$a{-schema} ||$a{-form} ||$a{-from};
  my $c =$a{-for} ||$a{-foreach};
 
- $a{-fields} =[map {  my $ff =$s->{-meta}->{$f}->{-fields}->{$_};
-		!$ff->{dataType} || !$ff->{fieldId}
-		|| ($ff->{dataType} =~/^(trim|control|table|column|page|attach)/)
-		|| ($ff->{fieldId} eq '15') # 'Status-History' # ars_GetListEntryWithFields() -> [ERROR] (ORA-00904: "C15": invalid identifier) (ARERR #552)
-		? ()
-		: ($ff->{fieldId})
-		} sort keys %{$s->{-meta}->{$f}->{-fields}}]
+ $a{-fields} =	$a{-fields} =~/^-\$/
+		? [map {  my $ff =$s->{-meta}->{$f}->{-fields}->{$_};
+			!$ff->{dataType} || !$ff->{fieldId}
+			|| ($ff->{dataType} =~/^(currency|trim|control|table|column|page|attach)/)
+			|| ($ff->{fieldId} eq '15') # 'Status-History' # ars_GetListEntryWithFields() -> [ERROR] (ORA-00904: "C15": invalid identifier) (ARERR #552)
+			? ()
+			: ($ff->{fieldId})
+			} sort keys %{$s->{-meta}->{$f}->{-fields}}]
+		: [map {  my $ff =$s->{-meta}->{$f}->{-fields}->{$_};
+			!$ff->{dataType} || !$ff->{fieldId}
+			|| ($ff->{dataType} =~/^(trim|control|table|column|page|attach)/)
+			|| ($ff->{fieldId} eq '15') # 'Status-History' # ars_GetListEntryWithFields() -> [ERROR] (ORA-00904: "C15": invalid identifier) (ARERR #552)
+			? ()
+			: ($ff->{fieldId})
+			} sort keys %{$s->{-meta}->{$f}->{-fields}}]
 		if $a{-fields} && !ref($a{-fields});
+
  $a{-fetch} =1	if $a{-fields} && !ref($a{-fields});
  delete $a{-fields}	if $a{-fetch};
 
@@ -1000,7 +1137,7 @@ sub query {	# ars_GetListEntry / ars_LoadQualifier
 			} @$fl) : '')
 		.($q ? ",-where=>$q" : '')
 		.(@fs ? ',-order=>' .join(', ', map {"'$_'"} @fs) : '')
-		.")";
+		.")" if 0;
  $q =ARS::ars_LoadQualifier($s->{-ctrl}, $f, $q);
  return(&{$s->{-die}}($s->cpcon($s->{-cmd} ." -> $ARS::ars_errstr")))
 	if !$q;
@@ -1514,13 +1651,17 @@ sub cgiconnect {# Connect CGI
  my $s =shift;
  no warnings;
  local $^W =0; 
- eval('use CGI; 1') ||return(&{$s->{-die}}('No CGI'));
+ $ENV{HTTP_USER_AGENT} =$ENV{HTTP_USER_AGENT}||'';
+ $ENV{PERLXS} ='PerlIS' if !$ENV{PERLXS} && ($^O eq 'MSWin32') && $0 =~/[\\\/]perlis\.dll$/i;
+ eval('use CGI; 1')
+	||return(&{$s->{-die}}('No CGI'));
  $s->{-cgi} =$CGI::Q =$CGI::Q =eval{CGI->new(@_)}
-	||return(&{$s->{-die}}($s->cpcon("cgi() -> $@")));
+	||return($s->{-die}
+		? &{$s->{-die}}($s->cpcon("cgi() -> $@"))
+		: CORE::die($s->cpcon("cgi() -> $@")));
  $s->set(-die=>'CGI::Carp fatalsToBrowser') if !$s->{-die};
  return(&{$s->{-die}}($s->cpcon("cgi() -> " .$s->{-cgi}->{'.cgi_error'})))
 	if $s->{-cgi}->{'.cgi_error'};
- $ENV{HTTP_USER_AGENT} =$ENV{HTTP_USER_AGENT}||'';
  if (1) {	# parse parameters
 		# __C_ change(d), 
 		# __O_ open, __L_ listbox choise, __S_ set, __X_ close
@@ -1892,19 +2033,19 @@ sub soon {	# Periodical execution of this script
 		return(&{$s->{-die}}("soon() -> 'MSWin32' required for `at`\n"))
 			if $^O ne 'MSWin32';
 		$cs->[0] =Win32::GetFullPathName($cs->[0])
-			if ($^O eq 'MSWin32');
+			if ($^O eq 'MSWin32') && ($cs->[0] !~/[\\\/]/);
 		$cs->[0] = $cs->[0]=~/^(.+?)[^\\\/]+$/ ? $1 .'perl.exe' : $cs->[0]
 			if $cs->[0] =~/\.dll$/i;
-		for(my $i=1; $i <=$#$cs; $i++) {
-			next if $cs->[$i] =~/^-/;
-			$cs->[$i] =Win32::GetFullPathName($cs->[$i])
-				if ($^O eq 'MSWin32');
-			last;
-		}
+		# for(my $i=1; $i <=$#$cs; $i++) {
+		#	next if $cs->[$i] =~/^[-\\\/]/;
+		#	$cs->[$i] =Win32::GetFullPathName($cs->[$i])
+		#		if ($^O eq 'MSWin32');
+		#	last;
+		# }
 		$qry =join(' ', @$cs);
 	}
 	print "Starting '$qry'...\n";
-	$s->fstore(">>$lf", "\n" .$s->strtime() ."\tStarting '$qry'...\n")
+	$s->fstore(">>$lf", "\n" .$s->strtime() ."\t$$\tStarting '$qry'...\n")
 		if $lf;
 	foreach my $l (`at`) {
 		next if $l !~/\Q$qry\E[\w\d\s]*[\r\n]*$/i;
@@ -1912,7 +2053,7 @@ sub soon {	# Periodical execution of this script
 		my $v =$1;
 		my $cmd ="at $v /d";
 		print("$cmd $l\n");
-		$s->fstore(">>$lf", $s->strtime() ."\t$cmd $l\n")
+		$s->fstore(">>$lf", $s->strtime() ."\t$$\t$cmd $l\n")
 			if $lf;
 		system($cmd);
 	}
@@ -1939,25 +2080,25 @@ sub soon {	# Periodical execution of this script
 		my $cmd =$cr;
 		if (ref($cr) eq 'ARRAY') {
 			$cr->[0] =Win32::GetFullPathName($cr->[0])
-				if ($^O eq 'MSWin32');
+				if ($^O eq 'MSWin32') && ($cs->[0] !~/[\\\/]/);
 			$cr->[0] = $cr->[0]=~/^(.+?)[^\\\/]+$/ ? $1 .'perl.exe' : $cr->[0]
 				if $cr->[0] =~/\.dll$/i;
-			for(my $i=1; $i <=$#$cr; $i++) {
-				next if $cr->[$i] =~/^-/;
-				$cr->[$i] =Win32::GetFullPathName($cr->[$i])
-					if ($^O eq 'MSWin32');
-				last;
-			}
+			# for(my $i=1; $i <=$#$cr; $i++) {
+			#	next if $cr->[$i] =~/^[-\\\/]/;
+			#	$cr->[$i] =Win32::GetFullPathName($cr->[$i])
+			#		if ($^O eq 'MSWin32');
+			#	last;
+			# }
 			$cmd =join(' ', @$cr);
 		}
 		if ($lf) {
 			$cmd ="$cmd >>$lf 2>>\&1";
 			print(($cs ? '' : "\n") ."$cmd\n");
-			$s->fstore(">>$lf", ($cs ? '' : "\n") .$s->strtime() ."\t$cmd\n");
+			$s->fstore(">>$lf", ($cs ? '' : "\n") .$s->strtime() ."\t$$\t$cmd\n");
 			if (system($cmd) <0) {
 				$r =0;
 				print("Error $!\n");
-				$s->fstore(">>$lf", $s->strtime() ."\t$!\n");
+				$s->fstore(">>$lf", $s->strtime() ."\t$$\t$!\n");
 			}
 		}
 		else {
@@ -1972,7 +2113,7 @@ sub soon {	# Periodical execution of this script
 	}
 	last if $cs;
 	print "sleep($mm)...\n";
-	$s->fstore(">>$lf", $s->strtime() ."\tsleep($mm)...\n")
+	$s->fstore(">>$lf", $s->strtime() ."\t$$\tsleep($mm)...\n")
 		if $lf;
 	sleep($mm *60);
  }
@@ -1981,11 +2122,11 @@ sub soon {	# Periodical execution of this script
 	$t1 =$1 if $t1 =~/\s([^\s]+)/;
 	my $cmd ="at $t1 /interactive " .(ref($cs) ? join(' ', @$cs) : $cs);
 	print("$cmd\n");
-	$s->fstore(">>$lf", $s->strtime() ."\t$cmd\n")
+	$s->fstore(">>$lf", $s->strtime() ."\t$$\t$cmd\n")
 		if $lf;
 	if (system($cmd) <0) {
 		print("Error $!\n");
-		$s->fstore(">>$lf", $s->strtime() ."\t$!\n")
+		$s->fstore(">>$lf", $s->strtime() ."\t$$\t$!\n")
 			if $lf;
 	}
  }
