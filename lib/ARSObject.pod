@@ -96,9 +96,9 @@ C<dbiconnect>(C<-dbiconnect>); C<-dbi>
 
 =item Metadata
 
-C<connect>;
+C<connect>; C<arsmeta>, C<arsmetamin>; C<schema>,...; C<lsflds>;
 C<-schema>, C<-meta>, C<-metax>, C<-metadn>, C<-metaid>, C<-schgen>, C<-schfdo>, C<-strFields>;
-C<Variable files>; C<lsflds>
+C<Variable files>
 
 
 
@@ -149,6 +149,80 @@ C<cgipar>, C<cgiesc>, C<cgitfrm>, C<cgitext>, C<cgistring>, C<cgiselect>, C<cgid
 C<smtp>, C<-smtp>, C<smtpconnect>, C<-smtphost>; C<smtpsend>
 
 
+
+=item CGI Form Presenter
+
+C<-fpl> => [-formdb=>'...',-record=>'...', {action field},.. {view/edit field},.., {button field},..}]
+
+C<-fphc> => {'cgi field name' => {field definition},..}
+
+C<-fphd> => {'db field name' => {field definition},..}
+
+C<cfprun>, C<cfpaction>, C<cfpv>, C<cfpvv>, C<cfpvl>, C<cfpvp>
+
+* action field: C<-name>.., C<-preact> || C<-action>, C<-widget>=>undef, C<-used>=>condition sub{}
+
+* key field: C<-name>.., C<-key>=>1, C<-readonly>=>1
+
+* text: C<-widget>=>'html'
+
+* edit field: C<-name>..,
+
+* computed: C<-name>.., C<-computed>=>sub{}
+
+* readonly: C<-name>.., C<-readonly>=>1
+
+* list&refresh: C<-name>.., C<-onchange>=>1, C<-labels>, C<-values>
+
+* optional button field: C<-name>.., C<-action>=>1, C<-used>=>condition
+
+
+
+=item CGI Form Presenter - Field Definitions
+
+(for each field inside C<CGI Form Presenter - Fields>)
+
+C<-name>, C<-namecgi>, C<-namedb> => 'field name'
+
+C<-namelbl>, C<-namecmt> => 'text for user'
+
+C<-namehtml> => sub{} -> 'html for user'
+
+C<-formdb> => 'name', C<-record> => 'name' || 'nameRowNumber'
+
+C<-used>, C<-unused> => boolean || 'field name' || ['field',...] || condition sub{}
+
+C<-preact> || C<-action> => 'action name' || action sub{} -> success
+
+C<-vfname> => 'name', C<-vfrenew>, C<-vfedit>, C<-vftran> => boolean
+
+C<-key> => boolean
+
+C<-master> => 'field name'
+
+C<-computed>, C<-value> => value || ['field from'] || sub{} -> value
+
+C<-undef> => value
+
+C<-values> => [value,..] || sub{}, C<-labels> => {value => label,..} || sub{}; C<-lbtran>, C<-lbadd> => boolean
+
+C<-reset> => 'field name' || ['field',...] || condition sub{}
+
+C<-change> => {set field values}
+
+C<-error>, C<-warn> => sub{} -> 'text'
+
+C<-widget> => {definitions for cgi field in the C<Utility Objects>} || html || sub{}->html
+Field definitions may be used also:
+C<-action> => 1;
+C<-labels>, C<-values>;
+C<-disabled>, C<-readonly>, C<-hidden>, C<-onchange> => boolean.
+
+C<-widget0> => html above C<-widget> || sub{} -> html
+
+C<-widget1> => html below C<-widget> || sub{} -> html
+
+
 =back
 
 
@@ -159,6 +233,27 @@ C<smtp>, C<-smtp>, C<smtpconnect>, C<-smtphost>; C<smtpsend>
 =item Slots
 
 
+=item -action
+
+	=> not exists 
+	|| sub{}({self}, action, '-action'
+		, {key field}, $_= key value, key pv
+		, {field db name=>value,..}, prev return)
+		-> success || {field db name => value}
+	|| 'entryIns' || 'entryUpd' || 'entryDel' || 'entrySave'
+	|| 1
+
+(C<CGI Form Presenter - Field Definitions>)
+Action to execute after the form performance,
+should be at the top of the form, before C<-key> fields.
+May be several actions with the same C<-namecgi>.
+1 - action button, it should to be at the bottom of the form.
+For 'entrySave' action, 'entryUpd' is used when non-empty key value,
+'entryDel' otherwise with non-empty previous key value.
+
+See also C<-preact>.
+
+
 =item -cgi
 
 	=> undef || CGI object
@@ -166,6 +261,28 @@ C<smtp>, C<-smtp>, C<smtpconnect>, C<-smtphost>; C<smtpsend>
 (C<Utility Objects>)
 L<CGI|CGI> utility object.
 See also C<cgi> method.
+
+
+
+=item -change
+
+	=> not exists
+	|| {field name => value || sub{}({self}, {field}, $_ =value),..}
+	|| {value=>{field name => value,..},..}
+
+(C<CGI Form Presenter - Field Definitions>)
+Change field values when this field changed.
+This may be defined also as C<-values> or C<-labels>.
+
+
+
+=item -computed
+
+	=> not exists || value || [field name] || sub{}({self},{field}) -> value
+
+(C<CGI Form Presenter - Field Definitions>)
+Computed field value evaluator.
+See also C<-value>.
 
 
 =item -cpcon
@@ -243,12 +360,127 @@ The logical number of the entry inserted by C<entryIns>().
 
 
 
+=item -error
+
+	=> not exists
+	|| sub{}({self}, {field}, $_ =field value, previous value) -> 'error text'
+	|| 'error text for empty field'
+
+(C<CGI Form Presenter - Field Definitions>)
+Field value error evaluator
+See also C<-warn>.
+
+
+
+=item -fpl
+
+	=> [-formdb=>'...',-record=>'...'
+	, {action field},.. {view/edit field},.., {button field},..}]
+
+=item -fphc
+
+	=> {'cgi field name' => {field definition},..}
+
+=item -fphd
+
+	=> {'db field name' => {field definition},..}
+
+(C<CGI Form Presenter>)
+Definitions of fields:
+list of field in order to be evaluated,
+field definitions by cgi names,
+field definitions by ARS db names.
+
+
+
+=item -formdb
+
+	=> 'db form name'
+
+(C<CGI Form Presenter - Field Definitions>)
+db form name, may be defined as a 
+special C<-fpl> entry before field definitions.
+
+
+=item -key
+
+	=> => not exists || boolean
+
+(C<CGI Form Presenter - Field Definitions>)
+Key database field?
+
+
+=item -labels
+
+	=> not exists || {value=>label,..} || {value=>{{-label=>label, field=>value,..},..}
+	|| sub{}({self},{field},$_=value) -> {value=>label,..}
+
+(C<CGI Form Presenter - Field Definitions>)
+Labels for the drop-down list box field.
+If no C<-values>, this will be generated automatically.
+Special {-name=>name, field=>value,..} form is to define C<-change>.
+See also C<-values>.
+
+
+
+=item -lbtran
+
+=item -lbadd
+
+	=> not exists || true || false (default)
+
+(C<CGI Form Presenter - Field Definitions>)
+Translate list box value with C<-labels> if needed?
+Add field value to C<-values> if not listed?
+
+
+
 =item -lang
 
 	=> '' || 'ARS language' || 'en_US' || 'ru_RU'...
 
 (C<Connection>)
 ARS language to use for session, i.e. 'en_US'
+
+
+
+=item -master
+
+	=> not exists || 'master field name'
+
+(C<CGI Form Presenter - Field Definitions>)
+Name of the field containg value for this field.
+
+
+
+=item -name
+
+	=> not exists || 'common field name'
+
+=item -namecgi
+
+	=> not exists || 'cgi field name'
+
+=item -namedb
+
+	=> not exists || 'ARS db field name'
+
+=item -namelbl
+
+	=> not exists || 'field label'
+
+=item -namecmt
+
+	=> not exists || 'comment text'
+
+=item -namehtml
+
+	=> not exists || sub{}(self, {field}, 'widget html') -> 'label html'
+
+(C<CGI Form Presenter - Field Definitions>)
+Field names, label, comment text.
+If C<-name> exists, it's value may be used as C<-namedb>,
+and escaped value may be used as C<-namecgi>.
 
 
 =item -maxRetrieve
@@ -302,12 +534,48 @@ This sub{}s may use C<strOut>() and C<strIn> methods.
 Field parameters to exclude from C<-meta> to decrease memory usage.
 
 
+=item -preact
+
+	=> not exists
+	|| sub{}({self}, action, '-preact'
+		, {key field}, $_= key value, key pv
+		, {field db name=>value,..})
+		-> success || {field db name => value}
+	|| 'vfentry' || 'vfhash' || 'entry' || 'entryNew'
+
+(C<CGI Form Presenter - Field Definitions>)
+Action to execute before the form performance,
+should be at the top of the form, before C<-key> fields.
+May be several actions with the same C<-namecgi>.
+Alternative key field name may be passed as L<CGI|CGI>->param(action-name).
+See alco C<-action>.
+
+
 =item -pswd
 
 	=> undef || ''
 
 (C<Connection>)
 ARS password string to login with
+
+
+=item -record 
+
+	=> 'record name' || 'nameRowNumber'
+
+(C<CGI Form Presenter - Field Definitions>)
+Record name, if several records in screen, 
+may be defined as a special C<-fpl> entry after C<-formdb> entry.
+Record name may be followed by row number.
+
+
+=item -reset
+
+	=> not exists || 'field name' || ['field name',..] || sub{}({self}, {field})
+
+(C<CGI Form Presenter - Field Definitions>)
+Condition to reset field value.
+If C<-values> and field value unfound, it will be reset also.
 
 
 =item -schema
@@ -391,12 +659,60 @@ Translate ARS field values using metadata and conversion sub{}s
 (C<-meta>, C<-metaid>, C<-metadn>)?
 
 
+
+=item -undef
+
+	=> not exists || value 
+
+(C<CGI Form Presenter - Field Definitions>)
+Field value to be treated as undef or null for database.
+See also C<-value>.
+
+
+
+=item -used
+
+	=> not exists == 1 || boolean || 'field name' || ['field name',..] 
+	|| sub{}({self}, {field})
+
+=item -unused
+
+	=> not exists == 0 || boolean || 'field name' || ['field name',..]
+	|| sub{}({self}, {field})
+
+(C<CGI Form Presenter - Field Definitions>)
+Condition to use or unuse field in the screen and actions.
+
+
 =item -usr
 
 	=> undef || 'ARS user name'
 
 (C<Connection>)
 ARS user name to login under
+
+
+
+=item -value
+
+	=> not exists || value || [field name] || sub{}({self},{field}) -> value
+
+(C<CGI Form Presenter - Field Definitions>)
+Default field value or field value evaluator.
+See also C<-computed>.
+
+
+
+=item -values
+
+	=> not exists || [value,..] || [{-name=>name, field=>value,..},..]
+	|| sub{}({self},{field},$_=value) -> [value,..]
+
+(C<CGI Form Presenter - Field Definitions>)
+Values for the drop-down list box field
+Special {-name=>name, field=>value,..} form is to define C<-change>.
+See also C<-labels>.
+
 
 
 =item -vfbase
@@ -407,6 +723,34 @@ ARS user name to login under
 Variable files base path name, used by C<vfstore>(), C<vfload>(), C<vfname>().
 Default is formed from script file name without extensions and with '-' added.
 
+
+=item -vfname 
+
+	=> not exists || '-slotName'
+
+=item -vfrenew
+
+	=> not exists || boolean
+
+=item -vfedit
+
+	=> not exists || boolean
+
+=item -vftran
+
+	=> not exists || boolean
+
+(C<CGI Form Presenter - Field Definitions>)
+Short name of the C<Variable File>
+to read record from with C<-action>=>'vfentry' or C<-action>=>'vfhash';
+or to renew or update after C<-action>=>'entryIns' || 'entryUpd' || 'entryDel'
+May be used with C<-action> or C<-key> field.
+
+C<-vfrenew> - renew variable file after 'entryIns' || 'entryUpd' || 'entryDel'
+
+C<-vfedit> - update variable file after 'entryIns' || 'entryUpd' || 'entryDel'
+
+C<-vftran> - translate value with C<-labels> for variable file
 
 
 =item -warn
@@ -420,6 +764,17 @@ or C<set>(C<-die> => 'CGI::Carp') to use L<CGI::Carp|CGI/Carp> module.
 See also C<-cpcon>.
 
 
+=item -warn
+
+	=> not exists
+	|| sub{}({self}, {field}, $_ =field value, previous value) -> 'warning text'
+	|| 'warning text for empty field'
+
+(C<CGI Form Presenter - Field Definitions>)
+Field value warning evaluator.
+See also C<-error>.
+
+
 
 =item -warnmsg
 
@@ -427,6 +782,40 @@ See also C<-cpcon>.
 
 Message for C<-warn>, alike C<-diemsg>.
 
+
+
+=item -widget
+
+	=> not exists || undef == skip || 'html'
+	|| sub{}({self}, {field}, value, previous value) -> html
+	|| {option=>value,..}
+
+(C<CGI Form Presenter - Field Definitions>)
+Definition of html field to display (C<Utility Objects>):
+
+	not exists - use default widget,
+	undef - field not included in form,
+	'html' - html to display,
+		hidden field with previous value added if '-namecgi'
+	sub{} -> html to display,...
+	{option=>value,..} - parameters for 'cgi...' or 'CGI' field
+
+Field definitions may be used also to generate default widget:
+C<-action> => 1;
+C<-labels>, C<-values>;
+C<-disabled>, C<-readonly>, C<-hidden>, C<-onchange> => boolean.
+
+
+
+=item -widget0
+
+=item -widget1
+
+	=> not exists || 'html'
+	|| sub{}({self}, {field}, value, previous value) -> html
+
+(C<CGI Form Presenter - Field Definitions>)
+html to display above and below C<-widget>
 
 
 
@@ -448,6 +837,24 @@ Message for C<-warn>, alike C<-diemsg>.
 Last ARS error.
 
 
+=item arsmeta (-param => value,...)
+
+(C<Metadata>)
+Load/refresh ARS metadata (C<vfload>/C<vfstore>(C<-meta>), C<-metadn>, C<-metaid>).
+Called from C<connect>.
+May be called without C<connect> if metadata file exists.
+See also C<arsmetamin>.
+
+
+=item arsmetamin (-param => value,...)
+
+(C<Metadata>)
+Refresh minimal ARS metadata set (C<vfstore>(C<-meta-min>)) after C<connect>/C<arsmeta> call.
+Load minimal ARS metadata instead of or after C<connect>/C<arsmeta> call.
+Loading of minimal metadata set is faster then loading all metadata with C<arsmeta>.
+Minimal metadata set includes explicit 'enumLimits'.
+
+
 
 =item arsquot (string) -> escaped and quoted for ARS
 
@@ -460,6 +867,46 @@ See also C<strquot>/C<strquot2>
 
 (C<ARS methods>)
 Use object->arsXXX() syntax for ARS:ars_XXX(ctrl,...) calls.
+
+
+
+=item cfpaction ({action} || 'action', '-preact'||'-action', {key field}) -> success
+
+(C<CGI Form Presenter>)
+Action evaluator, called from C<cfprun>(),
+may be called from C<-action> or C<-preact> sub{}.
+
+
+=item cfpl ('field name' || {field definition}) -> [possible field values]
+
+(C<CGI Form Presenter>)
+List of C<-values> of the field, may be used in sub{}s executed by C<cfprun>.
+
+
+=item cfpp ('field name' || {field definition}) -> previous field value
+
+(C<CGI Form Presenter>)
+Previous value of the field, may be used in sub{}s executed by C<cfprun>.
+
+
+=item cfprun (? msg sub{}(self, 'label', 'comment'), ? form row sub{}(self, {field}, 'html'), ? 'form start html', ? 'form end html') -> success
+
+(C<CGI Form Presenter>)
+Evaluate C<-fpl> and present html form with actions.
+The order of the fields is important, it is preferred to refer from
+the field definition to previous fields, not to subsequent.
+
+
+=item cfpv ('field name' || {field definition}) -> current field value
+
+(C<CGI Form Presenter>)
+Current value of the field, may be used in sub{}s executed by C<cfprun>.
+
+
+=item cfpvv ('field name' || {field definition}) -> current or default field value
+
+(C<CGI Form Presenter>)
+Current or default value of the field, may be used in sub{}s executed by C<cfprun>.
 
 
 
@@ -821,7 +1268,7 @@ Parameters:
 -fields => [fieldId | fieldName,...]
 # result set is hash refs for each record, ARS::ars_GetListEntryWithFields() used.
 
--fields => '*' | '*-$' | 1
+-fields => '*' | '*-$' | 1, -xfields=>sub{}(self, field) || [fieldName| fieldId,...]
 # result set is hash refs for each record, ARS::ars_GetListEntryWithFields() used.
 # use '*-$' to excude currency fields.
 
@@ -847,6 +1294,27 @@ strIn(form, fieldName, value) - to encode value for '-where'
 
 -echo => 1
 # output query and details to STDOUT
+
+
+
+=item schema () -> {schemaName => {metadata},...}
+
+=item schema (schema name) -> {schema metadata} || undef
+
+=item schfld (schema) -> {fieldName=>{field metadata},...}
+
+=item schfld (schema, field name | meta) -> {field metadata} || undef
+
+=item schid (schema, field '-metaid' | id) -> {fieldName=>'name', FieldId=>id}
+
+=item schdn (schema, field '-metadn' | name) -> {fieldName=>'name', FieldId=>id}
+
+=item schvals (schema, field name | id | meta) -> [itemNumber,...] || undef
+
+=item schlbls (schema, field name | id | meta) -> {itemNumber => itemName,...} || undef
+
+(C<Metadata>)
+Access to ARS metadata loaded by C<connect>, C<arsmeta>, C<arsmetamin>.
 
  
 
@@ -881,16 +1349,17 @@ Send L<Net::SMTP|Net/SMTP> e-mail using C<smtp>.
 
 
 
-=item soon (minutes, logfile ||'', run command || [command line] || sub{}, soon command || [command line])
+=item soon (minutes number || sub{}, logfile ||'', run command || [command line] || sub{}, soon command || [command line] || [])
 
-=item soon (minutes, logfile ||'', run command || [command line] || sub{})
+=item soon (minutes number || sub{}, logfile ||'', run command || [command line] || sub{})
 
-=item soon (minutes, logfile ||'', '', soon command || [command line])
+=item soon (minutes number || sub{}, logfile ||'', '', soon command || [command line])
 
 Execute the script periodically, run command immediately, soon command after delay specified.
 Log file name may be full file name, else C<vfname>(file name) will be used.
 If run command is empty, soon command will be scheduled.
 If soon command is empty, sleep(minutes*60) will be used, otherwise 'at' MSWin32 scheduling command.
+If !defined(minutes), soon command will be deleted from schedule.
 
 
 
@@ -1054,6 +1523,22 @@ If '-slotName-storable' => switch specified, it will be used instead of C<-stora
 =over
 
 
+=head2 2011-09-27
+
+Publishing 0.55 version
+
+
+=head2 2011-01-06
+
+New C<arsmeta>, C<arsmetamin>.
+Documented C<schema>.
+
+
+=head2 2011-01-26
+
+C<CGI Form Presenter> added.
+
+
 =head2 2010-11-22
 
 Publishing 0.54 version, with several enhancements and corrections.
@@ -1061,7 +1546,7 @@ Publishing 0.54 version, with several enhancements and corrections.
 New C<-diemsg>, C<-warnmsg>, C<fdirls>().
 
 C<vfload> - increased performance of loading text file,
-implemented tet/binary format autodetection.
+implemented text/binary format autodetection.
 
 
 =head2 2010-10-09
