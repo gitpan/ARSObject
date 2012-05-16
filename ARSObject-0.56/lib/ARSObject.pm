@@ -14,7 +14,7 @@ use UNIVERSAL;
 use strict;
 use POSIX qw(:fcntl_h);
 
-$VERSION = '0.55';
+$VERSION = '0.56';
 
 my $fretry =5;
 
@@ -36,15 +36,28 @@ sub new {	# New ARS object
 			})
 	#,-storable =>undef	# Use Storable module for cache files?
 	,-schgen => 1		# 1 - use vfname('meta') for '-meta', generate it from ARS if not exists.
-				# 2 - renewable 'meta'
+				# 2 - renewable 'meta' smartly
+				# 3 - renew meta always
+				# [schema,...] - list to renew
 	,-schfdo => 0		# Include display only fields into schema (AR_FIELD_OPTION_DISPLAY)
 	,-meta => {}		# Forms metadata from ARS:
 				#	{formName}->{-fields}->{fieldName}=>{}
 				#	{formName}->{-fldids}->{fieldId}=>{}
 				#	Additional parameters may be:
-				#	,'fieldLbl'=>label,'fieldLblc'=>label cmt
+				#	,'fieldLbl' =>label
+				#	,'fieldLbll'=>label localised
+				#	,'fieldLblc'=>label catenation/comment
+				#	,'fieldLbv' =>labels of values
+				#	,'fieldLbvl'=>labels of values localised
+				#	,'indexUnique'
 				#	,'strOut'|'strIn'=>sub(self,form,{field},$_=val){}
 	#,-meta-min		# Used in 'arsmetamin' operation
+	#,-meta-sql		# 'arsmetasql':	{tableName}->{-cols}->{sqlName}=>{fieldName, sqlName,...}
+				#		{tableName}->{-fields}->{fieldName}=>sqlName
+				#		{tableName}->{-ids}->{fieldId}=>sqlName
+				#		{-forms}->{formName}->{tableName}
+				#	also: -sqlname, -sqlntbl, -sqlncol, -sqlninc
+				#		-sqlschema
 	,-metax => 		# Exclude field schema parameters from '-meta'
 			['displayInstanceList','permissions']
 	,-metaid => {}		# Commonly used fields with common names and value translation
@@ -56,6 +69,7 @@ sub new {	# New ARS object
 	,-maxRetrieve => 0	# ARS::ars_GetListEntry(maxRetrieve)
 	,-entryNo => undef	# Logical number of entry inserted
 	,-strFields => 1	# Translate fields data using 'strIn'/'strOut'/'-meta'?
+				# 1 - 'enumLimits', 2 - 'fieldLbvl' before 'enumLimits'
 	,-cmd =>''		# Command running, for err messages, script local $s->{-cmd}
 	,-die =>undef		# Error die/warn,  'Carp' or 'CGI::Carp...'
 	# ,-diemsg => undef	#
@@ -83,9 +97,12 @@ sub new {	# New ARS object
 
 sub AUTOLOAD {	# Use self->arsXXX() syntax for ars_XXX(ctrl,...) calls
  my $m =substr($AUTOLOAD, rindex($AUTOLOAD, '::')+2);
- $m =~s/^ars/ARS::ars_/;
- return(&{$_[0]->{-die}}($_[0]->efmt("Called name without 'ars_'", $_[0]->{-cmd}, undef, 'AUTOLOAD',$m)))
+ return(&{$_[0]->{-die}}($_[0]->efmt("Called name without 'ars'", $_[0]->{-cmd}, undef, 'AUTOLOAD',$m)))
+	if $m !~/^ars/;
+ $m =~s/^ars/ars_/
 	if $m !~/^ars_/;
+ $m =~s/^ars/ARS::ars/
+	if $m !~/^ARS::/;
  no strict;
  &$m($_[0]->{-ctrl}, @_[1..$#_])
 }
@@ -876,29 +893,52 @@ sub arsmeta {		# Load/refresh ARS metadata
 	}
 	elsif (($s->{-schgen} >1) && (-e $s->vfname('-meta'))) {
 		$s->vfload('-meta');
-		$vfs =[stat $s->vfname('-meta')]->[9];
+		$vfs =$s->{-schgen} >2
+			? 0
+			: ([stat $s->vfname('-meta')]->[9] ||0);
 	}
 	else {
 		$s->{-meta} ={};
 	}
 	foreach my $f (ref($s->{-schgen}) ? @{$s->{-schgen}} : @{$s->{-schema}}){
+		my $fa =ARS::ars_GetSchema($s->{-ctrl}, $f);
+		!$fa && return(&{$s->{-die}}($s->efmt($ARS::ars_errstr,$s->{-cmd},undef,'ars_GetSchema',$f)));
 		if ($vfs && $s->{-meta}->{$f}) {
-			my $fa =ARS::ars_GetSchema($s->{-ctrl}, $f);
-			!$fa && return(&{$s->{-die}}($s->efmt($ARS::ars_errstr,$s->{-cmd},undef,'ars_GetSchema',$f)));
-			# print $s->strtime($fa->{timestamp}),'/',$s->strtime($vfs), "\n", $s->cpcon($s->dsdump($fa)), "\n"; exit(0);
+			#print $s->strtime($fa->{timestamp}),'/',$s->strtime($vfs), "\n", $s->cpcon($s->dsdump($fa)), "\n"; exit(0);
 			next	if $s->{-meta}->{$f} && $s->{-meta}->{$f}->{timestamp}
-				? ($s->{-meta}->{$f}->{timestamp}||0) >=($fa->{timestamp}||0)
+				? (($s->{-meta}->{$f}->{timestamp}||0) >=($fa->{timestamp}||0))
+					&& ($vfs >=($fa->{timestamp}||0))
 				: $vfs >=($fa->{timestamp}||0 +60*60);
-			$s->{-meta}->{$f} ={};
-			$s->{-meta}->{$f}->{-fields} ={};
-			$s->{-meta}->{$f}->{timestamp} =$fa->{timestamp};
-			$vfu =1
 		}
-		else {
-			$s->{-meta}->{$f} ={};
-			$s->{-meta}->{$f}->{-fields} ={};
-			$vfu =1
+		$vfu =1;
+		$s->{-meta}->{$f} ={}; # {} || $fa
+		$s->{-meta}->{$f}->{-fields} ={};
+		$s->{-meta}->{$f}->{timestamp} =$fa->{timestamp};
+		# $s->{-meta}->{$f}->{indexList} =$fa->{indexList};
+		# $s->{-meta}->{$f}->{getListFields} =$fa->{getListFields};
+		# $s->{-meta}->{$f}->{sortList} =$fa->{sortList};
+		my ($cyr, $vli, $vll) =1 && $s->{-lang} && ($s->{-lang} =~/^(?:ru)/i);
+		if (!$cyr && $s->{-lang}) {
+			my $vlc;
+			my $ull =$s->{-lang} =~/^([A-Za-z]+)/  ? $1 : $s->{-lang};
+			my $ulc =$s->{-lang} =~/^([A-Za-z_]+)/ ? $1 : $s->{-lang};
+			my $i =0;
+			foreach my $vi (ars_GetListVUI($s->{-ctrl}, $f, 0)) {
+				my $vw =ars_GetVUI($s->{-ctrl}, $f, $vi);
+				# language[_territory[.codeset]][@modifier]
+				# en_US.ISO8859-15@euro
+				$vli =$i if !defined($vli) && !$vw->{locale};
+				$vlc =$i if !defined($vlc) &&  $vw->{locale} && ($vw->{locale} =~/^\Q$ulc\E/);
+				$vll =$i if !defined($vll) &&  $vw->{locale} && ($vw->{locale} =~/^\Q$ull\E/);
+				last if defined($vli) && defined($vlc) && defined($vll);
+				$i++
+			}
+			$vll =$vlc if defined($vlc);
 		}
+		my $ix ={map {$_->{unique}
+				&& (scalar(@{$_->{fieldIds}}) ==1)
+				? ($_->{fieldIds}->[0] => 1)
+				: ()} @{$fa->{indexList}}};
 		my %ff =ARS::ars_GetFieldTable($s->{-ctrl}, $f);
 		!%ff && return(&{$s->{-die}}($s->efmt($ARS::ars_errstr,$s->{-cmd},undef,'ars_GetFieldTable',$f)));
 		foreach my $ff (sort keys %ff) {
@@ -909,16 +949,57 @@ sub arsmeta {		# Load/refresh ARS metadata
 				|| ($fm->{dataType} =~/^(trim|control|table|column|page)/);
 			next	if !$s->{-schfdo} && $fm->{option} && ($fm->{option} == 4); # AR_FIELD_OPTION_DISPLAY
 			$s->{-meta}->{$f}->{-fields}->{$ff} =$fm;
+			$s->{-meta}->{$f}->{-fields}->{$ff}->{indexUnique} =$fm->{fieldId}
+				if $ix->{$fm->{fieldId}}
+				|| ($fm->{fieldId} eq '1'); # || '179'?
 			if ($fm->{displayInstanceList}->{dInstanceList}
-			&& !exists($fm->{fieldLbl}) && !exists($fm->{fieldLblc})) {
+				) {
+				# foreach my $i (defined($vli) || defined($vll) ? (map {defined($_) ? $_ : ()} $vli, $vll) : (0..$#{$fm->{displayInstanceList}->{dInstanceList}})) {
 				for (my $i =0; $i <=$#{$fm->{displayInstanceList}->{dInstanceList}}; $i++) {
 					next if !$fm->{displayInstanceList}->{dInstanceList}->[$i]->{props};
 					for(my $j =0; $j <=$#{$fm->{displayInstanceList}->{dInstanceList}->[$i]->{props}}; $j++) {
-						if (20 ==$fm->{displayInstanceList}->{dInstanceList}->[$i]->{props}->[$j]->{prop}) {
-							$fm->{fieldLbl} =$fm->{displayInstanceList}->{dInstanceList}->[$i]->{props}->[$j]->{value}
-								if $i;
+						my $prp =$fm->{displayInstanceList}->{dInstanceList}->[$i]->{props}->[$j]->{prop};
+						if ($prp ==20) {
+							# $i   == vui id
+							# prop == 20 == AR_DPROP_LABEL
+							my $v =$fm->{displayInstanceList}->{dInstanceList}->[$i]->{props}->[$j]->{value};
+							$fm->{fieldLbl} =$v
+								if 1
+								&& !$fm->{fieldLbl}
+								&& ((defined($vli)
+								    && ($i == $vli))
+								   || ($v =~/^[\s\d*\\=-]*[A-Za-z]/));
+							$fm->{fieldLbll} =$v
+								if 1
+								&& !$fm->{fieldLbll}
+								&& ((defined($vll)
+								     && ($i == $vll))
+								   || ($cyr && ($v !~/^[\s\d*\\=-]*[A-Za-z]/)));
 							$fm->{fieldLblc} =($fm->{fieldLblc} ? $fm->{fieldLblc} .'; ' : '')
-								."[$i,$j] " .$fm->{displayInstanceList}->{dInstanceList}->[$i]->{props}->[$j]->{value}
+								."[$i] $v"
+								if !$cyr
+								&& !defined($vll)
+								&& ($fm->{fieldLblc}||'') !~/\Q$v\E/;
+						}
+						elsif ($prp ==230) {
+							# $i   == vui id
+							# prop == 230 == AR_DPROP_ENUM_LABELS
+							# 6\0\Proposed\1\Enabled\2\Offline\3\Obsolete\4\Archive\5\Delete
+							# next if $fm->{fieldLbv} && (!$cyr ||$fm->{fieldLbvl});
+							my $v =$fm->{displayInstanceList}->{dInstanceList}->[$i]->{props}->[$j]->{value};
+							$v=$v =~/^\d+(\\\d+\\.+)/ ? $1 : $v;
+							$fm->{fieldLbv} =$v
+								if 0
+								&& !$fm->{fieldLbv}
+								&& ((defined($vli)
+								     && ($i == $vli))
+								   || ($v =~/^[\s\d*\\=-]*[A-Za-z]/));
+							$fm->{fieldLbvl} =$v
+								if 1
+								&& !$fm->{fieldLbvl}
+								&& ((defined($vll)
+								     && ($i == $vll))
+								   || ($cyr && ($v !~/^[\s\d*\\=-]*[A-Za-z]/)));
 						}
 					}
 				}
@@ -993,11 +1074,13 @@ sub arsmetamin {	# Minimal ARS metadata ('-meta-min' varfile)
  local $s->{-cmd} =($s->{-cmd} ? $s->{-cmd} .': ' : '')
 	.($s->{-schgen} ? "dumper('" .$s->vfname('meta-min') ."')" : 'arsmetamin()');
  if (ref($s->{-schgen})
+ || !$s->{-schgen}
  || ($s->{-schgen} && ($s->{-schgen} >1))
  || (!-e $s->vfname('-meta-min'))
 	) {
 	$s->arsmeta() if !$s->{-meta} ||!scalar(%{$s->{-meta}});
 	my $fvs =[stat $s->vfname('-meta-min')]->[9] ||0;
+	$fvs =0 if ($s->{-schgen} && (ref($s->{-schgen}) || ($s->{-schgen} >2)));
 	$fvs =0 if $fvs && ($fvs <([stat $s->vfname('-meta')]->[9]||0));
 	$fvs =0 if $fvs && ($fvs <([stat ($^O eq 'MSWin32' ? scalar(Win32::GetFullPathName($0)) : $0)]->[9]||0));
 	if (!$fvs) {
@@ -1005,41 +1088,254 @@ sub arsmetamin {	# Minimal ARS metadata ('-meta-min' varfile)
 		foreach my $f (keys %{$s->{-meta}}) {
 			foreach my $ff (keys %{$s->{-meta}->{$f}->{-fields}}) {
 				my $e =$s->{-meta}->{$f}->{-fields}->{$ff};
-				next	if !$e->{'limit'}
+				next	if (!$e->{dataType}
+						|| ($e->{dataType} ne 'time'))
+					&& (!$e->{'limit'}
 					|| !$e->{'limit'}->{'enumLimits'}
-					|| !($e->{'limit'}->{'enumLimits'}->{'regularList'} ||$e->{'limit'}->{'enumLimits'}->{'customList'});
+					|| !($e->{'limit'}->{'enumLimits'}->{'regularList'} ||$e->{'limit'}->{'enumLimits'}->{'customList'}));
 				$s->{'-meta-min'}->{$f} ={} if !$s->{'-meta-min'}->{$f};
 				$s->{'-meta-min'}->{$f}->{-fields} ={} if !$s->{'-meta-min'}->{$f}->{-fields};
 				$e ={%$e};
 				delete @$e{'owner','lastChanged', 'timestamp'};
-				$s->{'-meta-min'}->{$f}->{-fields}->{$ff} ={%$e};				
+				$s->{'-meta-min'}->{$f}->{-fields}->{$ff} ={%$e};
 			}
 		}
-		$s->vfstore('-meta-min');
+		$s->vfstore('-meta-min') if $s->{-schgen} && ($s->{-schgen} eq '1' ? !-e $s->vfname('-meta-min') : 1);
 	};
  };
 # print do($s->vfname('-meta-min'))||0,' ', $@||'', $s->vfname('-meta-min'),' ', "\n";
- $s->vfload('-meta-min') if !$s->{'-meta-min'};
+ $s->vfload('-meta-min') if !$s->{'-meta-min'} && $s->{-schgen};
  if (!$s->{-meta} ||!scalar(%{$s->{-meta}})) {
 	$s->{-meta} =$s->{'-meta-min'};
 	$s->arsmetaix();
  }
  else {
 	foreach my $f (keys %{$s->{'-meta-min'}}) {
+		next if $s->{-meta}->{$f};
 		my $fs =$s->{'-meta-min'}->{$f};
 		$s->{-meta}->{$f} ={}
 			if !$s->{-meta}->{$f};
 		foreach my $ff (keys %{$fs->{-fields}}) {
 			$s->{-meta}->{$f}->{-fields}->{$ff} ={}
 				if !$s->{-meta}->{$f}->{-fields}->{$ff};
-			@{$s->{-meta}->{$f}->{-fields}->{$ff}}{keys %{$fs->{-fields}->{$ff}}}
-				=values %{$fs->{-fields}->{$ff}};
+			eval {@{$s->{-meta}->{$f}->{-fields}->{$ff}}{keys %{$fs->{-fields}->{$ff}}}
+				=values %{$fs->{-fields}->{$ff}}};
 		}
 	}
 	$s->arsmetaix()
  }
  delete $s->{'-meta-min'};
  $s;
+}
+
+
+sub arsmetasql {	# SQL ARS metadata ('-meta-sql' varfile)
+ my $s =shift;		# 	refresh after 'arsmeta'/'connect'
+ $s->set(@_);		# !!! 'enum' texts
+ local $s->{-cmd} =($s->{-cmd} ? $s->{-cmd} .': ' : '')
+	.($s->{-schgen} ? "dumper('" .$s->vfname('meta-sql') ."')" : 'arsmetasql()');
+ if (ref($s->{-schgen})
+ || !$s->{-schgen}
+ || ($s->{-schgen} && ($s->{-schgen} >1))
+ || (!-e $s->vfname('-meta-sql'))
+	) {
+	$s->arsmeta() if !$s->{-meta} ||!scalar(%{$s->{-meta}});
+	my $fvs =[stat $s->vfname('-meta-sql')]->[9] ||0;
+	$fvs =0 if ($s->{-schgen} && (ref($s->{-schgen}) || ($s->{-schgen} >2)));
+	$fvs =0 if $fvs && ($fvs <([stat $s->vfname('-meta')]->[9]||0));
+	$fvs =0 if $fvs && ($fvs <([stat ($^O eq 'MSWin32' ? scalar(Win32::GetFullPathName($0)) : $0)]->[9]||0));
+	if (!$fvs) {
+		$s->vfload('-meta-sql') if $s->{-schgen} && -e $s->vfname('-meta-sql');
+		$s->{'-meta-sql'} ={}	if !$s->{'-meta-sql'};
+		foreach my $f ($s->{-schema} ? @{$s->{-schema}} : sort keys %{$s->{-meta}}) {
+			$s->sqlname($f);
+			foreach my $ff (sort keys %{$s->{-meta}->{$f}->{-fields}}) {
+				$s->sqlname($f,$ff,1);
+				if ($s->{-meta}->{$f}->{-fields}->{$ff}->{dataType} eq 'enum') {
+					# $s->sqlname($f,'_str_' .$ff,1);
+					# $s->{'-meta-sql'}->{$s->sqlname($f)}->{-cols}->{$s->sqlname($f,'_str_' .$ff)}->{TYPE_NAME} ='varchar';
+				}
+			}
+			foreach my $ff ('_arsobject_insert', '_arsobject_update', '_arsobject_delete') {
+				$s->sqlname($f,$ff,1);
+				$s->{'-meta-sql'}->{$s->sqlname($f)}->{-cols}->{$s->sqlname($f,$ff)}->{TYPE_NAME} ='int';
+			}
+		}
+		$s->vfstore('-meta-sql') if $s->{-schgen} && ($s->{-schgen} eq '1' ? !-e $s->vfname('-meta-sql') : 1);
+	};
+ };
+# print do($s->vfname('-meta-sql'))||0,' ', $@||'', $s->vfname('-meta-sql'),' ', "\n";
+ $s->vfload('-meta-sql') if !$s->{'-meta-sql'} && $s->{-schgen};
+ $s;
+}
+
+
+
+sub sqlnesc {	# SQL name escaping, default for '-sqlname', '-sqlntbl', '-sqlncol'
+ my $v =lc($_[1]); # (self, name) -> escaped
+ $v =~s/[^a-zA-Z0-9_]/_/g;
+ $v =substr($v,0,64) if length($v) >64;
+ $v
+}
+
+
+sub sqlninc {	# SQL name incrementing, default for '-sqlninc'
+ my $v =$_[1];	# (self, name) -> incremented
+ my ($n, $nn);
+ if (0) {
+	($n, $nn) =$v =~/^(.+?)_([1-9]+)$/ ? ($1, '_' .($2 +1)) : ($v, '_1');
+ }
+ else {
+	($n, $nn) =$v =~/^(.+?)_([A-Z]+)$/ ? ($1, $2) : ($v, '');
+	$nn ='_' .(!$nn ? 'A' : substr($nn,-1,1) eq 'Z' ? $nn .'A' : (substr($nn,0,-1) .chr(ord(substr($nn,-1,1)) +1)));
+ }
+ $v =$n .$nn;
+ length($v) >64 ? substr($n, 0, 64 -length($nn)) .$nn : $v
+}
+
+
+sub sqlname {	# SQL name from ARS name
+		# (formName, ?fieldName, ?force update meta) -> SQL name
+		# -sqlname, -sqlntbl, -sqlncol, -sqlninc
+ my($s,$f,$ff,$fu) =@_;	
+ return(undef)
+	if !$f;
+ return($s->{'-meta-sql'}->{-forms}->{$f})
+	if !$ff && !$fu
+	&& $s->{'-meta-sql'}
+	&& $s->{'-meta-sql'}->{-forms} 
+	&& $s->{'-meta-sql'}->{-forms}->{$f};
+ return($s->{'-meta-sql'}->{$s->{'-meta-sql'}->{-forms}->{$f}}->{-fields}->{$ff})
+	if $ff && !$fu
+	&& $s->{'-meta-sql'}
+	&& $s->{'-meta-sql'}->{-forms}
+	&& $s->{'-meta-sql'}->{-forms}->{$f} 
+	&& $s->{'-meta-sql'}->{$s->{'-meta-sql'}->{-forms}->{$f}}->{-fields}
+	&& $s->{'-meta-sql'}->{$s->{'-meta-sql'}->{-forms}->{$f}}->{-fields}->{$ff};
+ my $ffh =$ff && $s->{-meta} && $s->{-meta}->{$f} && $s->{-meta}->{$f}->{-fields} && $s->{-meta}->{$f}->{-fields}->{$ff};
+ return($s->{'-meta-sql'}->{$s->{'-meta-sql'}->{-forms}->{$f}}->{-fields}->{$s->{'-meta-sql'}->{$s->{'-meta-sql'}->{-forms}->{$f}}->{-ids}->{$ffh->{fieldId}}})
+	if $ff && !$fu && $ffh && $ffh->{fieldId}
+	&& $s->{'-meta-sql'}
+	&& $s->{'-meta-sql'}->{-forms}
+	&& $s->{'-meta-sql'}->{-forms}->{$f} 
+	&& $s->{'-meta-sql'}->{$s->{'-meta-sql'}->{-forms}->{$f}}->{-ids}
+	&& $s->{'-meta-sql'}->{$s->{'-meta-sql'}->{-forms}->{$f}}->{-ids}->{$ffh->{fieldId}};	
+ my $tn =!$f
+	? $f
+	: $s->{-sqlntbl}
+	? &{$s->{-sqlntbl}($s, $f)}
+	: $s->{-sqlname}
+	? &{$s->{-sqlname}($s, $f)}
+	: sqlnesc($s, $f);
+ return($tn) if !$f ||!$tn;
+ $s->{'-meta-sql'} ={} if !$s->{'-meta-sql'};
+ $s->{'-meta-sql'}->{-forms} ={} if !$s->{'-meta-sql'}->{-forms};
+ while ($s->{'-meta-sql'}->{$tn} && ($s->{'-meta-sql'}->{$tn}->{formName} ne $f)) {
+	$tn =$s->{-sqlninc} ? &{$s->{-sqlninc}}($s, $tn) : sqlninc($s, $tn);
+ }
+ if (!$s->{'-meta-sql'}->{$tn}) {
+	$s->{'-meta-sql'}->{$tn} ={formName=>$f, -cols=>{}, -fields=>{}, -ids=>{}, timestamp=>time()};
+	$s->{'-meta-sql'}->{-forms}->{$f} =$tn;
+ }
+ elsif ($fu) {
+	$s->{'-meta-sql'}->{$tn}->{formName} =$f;
+	$s->{'-meta-sql'}->{-forms}->{$f} =$tn;
+ }
+ return($tn) if !$ff;
+ my $tc =!$ff
+	? $ff
+	: $ffh && $ffh->{fieldId} 
+		&& $s->{'-meta-sql'}->{$tn}
+		&& $s->{'-meta-sql'}->{$tn}->{-ids} && $s->{'-meta-sql'}->{$tn}->{-ids}->{$ffh->{fieldId}}
+	? $s->{'-meta-sql'}->{$tn}->{-ids}->{$ffh->{fieldId}}
+	: $s->{-sqlncol}
+	? &{$s->{-sqlncol}($s, $ff)}
+	: $s->{-sqlname}
+	? &{$s->{-sqlname}($s, $ff)}
+	: sqlnesc($s, $ff);
+ return($tc) if !$tc;
+ while ($s->{'-meta-sql'}->{$tn}->{-cols}->{$tc} && ($s->{'-meta-sql'}->{$tn}->{-cols}->{$tc}->{fieldName} ne $ff)) {
+	$tc =$s->{-sqlninc} ? &{$s->{-sqlninc}}($s, $tc) : sqlninc($s, $tc);
+ }
+ if ($fu ||!$s->{'-meta-sql'}->{$tn}->{-cols}->{$tc}) {
+	my $flh =$s->{-meta}->{$f}->{-fields}->{$ff}->{limit};
+	my $tch ={COLUMN_NAME => $tc
+		, 'fieldName'=>$ff
+		, 'dataType' => $ffh->{dataType}
+		, 'timestamp'=>$s->{'-meta-sql'}->{$tn}->{-cols}->{$tc}
+				&& $s->{'-meta-sql'}->{$tn}->{-cols}->{$tc}->{'timestamp'}
+				|| time()
+		, $ffh && $ffh->{fieldId}
+		? ('fieldId' => $ffh->{fieldId})
+		: ()
+		, !$ffh ||!$ffh->{dataType}
+		? ()
+		: $ffh->{dataType} eq 'integer'
+		? (TYPE_NAME => 'int')
+		: $ffh->{dataType} eq 'real'
+		? (TYPE_NAME => 'float')
+		: $ffh->{dataType} eq 'decimal'
+		? (TYPE_NAME => $ffh->{dataType}
+			, $flh
+			? ($flh->{precision} ? (DECIMAL_DIGITS => $flh->{precision}) : ()
+			  ,$flh->{rangeHigh} ? (COLUMN_SIZE => length($flh->{rangeHigh})) : ()
+				)
+			: ()
+			)
+		: $ffh->{dataType} eq 'char'
+			&& (!$flh || !$flh->{maxLength} || ($flh->{maxLength} >255))
+		? (TYPE_NAME => 'text')
+		: 0 && ($ffh->{dataType} eq 'char') &&  $ffh->{indexUnique}
+		? (TYPE_NAME => 'char'
+			, $flh && $flh->{maxLength} 
+			? (COLUMN_SIZE => $flh->{maxLength})
+			: ()
+			)
+		: $ffh->{dataType} eq 'char'
+		? (TYPE_NAME=>'varchar' # $ffh->{dataType}
+			, $flh && $flh->{maxLength} 
+			? (COLUMN_SIZE => $flh->{maxLength})
+			: ()
+			)
+		: $ffh->{dataType} eq 'diary'
+		? (TYPE_NAME => 'text')
+		: $ffh->{dataType} eq 'time'
+		? (TYPE_NAME => 'datetime'	# !'int'
+			#,COLUMN_SIZE=>19,DECIMAL_DIGITS=>0
+			)
+		: $ffh->{dataType} eq 'enum'
+		? (TYPE_NAME => 'int')
+		: ()
+		, $ffh && $ffh->{fieldId}
+			&& (($ffh->{fieldId} =~/^(?:1)$/) || $ffh->{indexUnique})
+		? (IS_PK => $ffh->{fieldId})
+		: ()
+		, $ffh && $ffh->{fieldMap} 
+			&& $ffh->{fieldMap}->{fieldType}
+			&& ($ffh->{fieldMap}->{fieldType} ==2)
+			&& $ffh->{fieldMap}->{join} 
+			&& (($ffh->{fieldMap}->{join}->{schemaIndex}||0) !=0)
+		? (IS_JOINED => ($ffh->{fieldMap}->{join}->{realId} || 1))
+		: ()
+		, !$ffh ||!$ffh->{option}
+		? ()
+		: $ffh->{option} ==1
+		? ()
+		: $ffh->{option} ==2
+		? (NULLABLE => 1)
+		: $ffh->{option} ==4
+		? (DISPLAY_ONLY => 1)
+		: ()
+		, $ffh && $ffh->{fieldId} && ($ffh->{fieldId} ==6)
+		? (IS_TIMESTAMP => 1)
+		: ()
+		};
+	$s->{'-meta-sql'}->{$tn}->{-cols}->{$tc} =$tch;
+	$s->{'-meta-sql'}->{$tn}->{-fields}->{$ff} =$tc;
+	$s->{'-meta-sql'}->{$tn}->{-ids}->{$ffh->{fieldId}} =$tc
+		if $ffh->{fieldId};
+ }
+ $tc
 }
 
 
@@ -1124,6 +1420,19 @@ sub schlbls {	# Enum field {values => labels}
 }
 
 
+
+sub schlblsl {	# Enum field {values => labels localised}
+		# (schema, fieldId) -> {value=>localised label,...}
+ my($s,$f,$ff) =@_;
+ $ff =ref($ff) ? $ff
+	: !$s->{-meta} || !$s->{-meta}->{$f} ? return(undef)
+	: $ff =~/^\d+$/ ? $s->{-meta}->{$f}->{-fldids}->{$ff}
+	: $s->{-meta}->{$f}->{-fields}->{$ff};
+ $ff->{fieldLbvl} ? {split /\\+/, substr($ff->{fieldLbvl},1)} : schlbls($s,$f,$ff)
+}
+
+
+
 sub schvals {	# Enum field [values]
 		# (schema, fieldId) -> [value,...]
  my($s,$f,$ff) =@_;
@@ -1158,6 +1467,9 @@ sub strOut {	# Convert field value for output, using '-meta'
  $ff =ref($ff) ? $ff : $ff =~/^\d+$/ ? $s->{-meta}->{$f}->{-fldids}->{$ff} : $s->{-meta}->{$f}->{-fields}->{$ff}; 
  if (!defined($v) ||!$ff ||!$s->{-strFields}) {
  }
+ elsif ($ff->{fieldLbvl} && ($s->{-strFields} ==2) && ($ff->{fieldLbvl} =~/\\\Q$v\E\\([^\\]+)/)) {
+	$v =$1
+ }
  elsif ($ff->{-hashOut}) {
 	if (exists($ff->{-hashOut}->{$v})) {
 		$v =$ff->{-hashOut}->{$v}
@@ -1177,13 +1489,17 @@ sub strOut {	# Convert field value for output, using '-meta'
 }
 
 
-sub strIn {	# Convert input field value, using '-meta'
+sub strIn {	# Convert input field value to internal, using '-meta'
 		# (schema, fieldId, fieldValue) -> fieldValue
  my($s,$f,$ff,$v) =@_;
  $ff =ref($ff) ? $ff : $ff =~/^\d+$/ ? $s->{-meta}->{$f}->{-fldids}->{$ff} : $s->{-meta}->{$f}->{-fields}->{$ff};
  if (!defined($v) ||!$ff ||!$s->{-strFields}) {
  }
  elsif ($v =~/^\d+$/) {
+ }
+ elsif ($ff->{fieldLbvl} && ($ff->{fieldLbvl} =~/\\(\d+)\\\Q$v\E(?:\\|$)/)) {
+	# && ($s->{-strFields} ==2)
+	$v =$1
  }
  elsif ($ff->{-hashIn}) {
 	if (exists($ff->{-hashIn}->{$v})) {
@@ -1226,21 +1542,24 @@ sub strIn {	# Convert input field value, using '-meta'
 sub lsflds {	# List fields from '-meta'
 		# (additional field options)
  my ($s, @a) =@_;
- @a =('fieldLblc', 'helpText') if !@a;
+ @a =('fieldLblc') if !@a;
  unshift @a, 'fieldName', 'fieldId', 'dataType', 'option', 'createMode';
  map {	my $f =$_;
 	$f =~/^-/
 	? ()
 	: map {	my $ff =$s->{-meta}->{$f}->{-fields}->{$_};
 		join("\t", $f
-			, $ff->{option} && ($ff->{option} == 4) ? 'ro' : ()
-			, (map {!defined($ff->{$_})
+			#, $ff->{option} && ($ff->{option} == 4) ? 'ro' : ()
+			, (map {  $_ eq 'fieldLblc'
+				? join('; '
+					, map {$ff->{$_} ? $ff->{$_} : ()
+						} $ff->{$_} ? ('fieldLblc') : ('fieldLbl', 'fieldLbll'), 'fieldLbv', 'fieldLbvl', 'helpText')
+				: !defined($ff->{$_})
 				? ''
 				: $_ eq 'option'
 				? (!$ff->{$_} ? '' : $ff->{$_} == 4 ? 'r' : $ff->{$_} == 2 ? 'o' : $ff->{$_} == 1 ? 'm' : '')
 				: $ff->{$_}
-				} @a[0..$#a-1])
-			, defined($ff->{$a[$#a]}) ? $ff->{$a[$#a]} : ())
+				} @a[0..$#a]))
 		} sort keys %{$s->{-meta}->{$f}->{-fields}}
 	} sort keys %{$s->{-meta}}
 }
@@ -1286,24 +1605,21 @@ sub query {	# ars_GetListEntry / ars_LoadQualifier
  my $f =$a{-schema} ||$a{-form} ||$a{-from};
  my $c =$a{-for} ||$a{-foreach};
 
- $a{-fields} =	$a{-fields} =~/^-\$/
-		? [map {  my $ff =$s->{-meta}->{$f}->{-fields}->{$_};
+ if ($a{-fields} && !ref($a{-fields})) {
+	my $q ='trim|control|table|column|page';
+	$q .= '|currency|attach' if $a{-fields} =~/^-\$/;
+	$q .= '|attach'		 if $a{-fields} =~/^-f/;
+	$a{-fields} = 
+		[map {  my $ff =$s->{-meta}->{$f}->{-fields}->{$_};
 			!$ff->{dataType} || !$ff->{fieldId}
-			|| ($ff->{dataType} =~/^(currency|trim|control|table|column|page|attach)/)
-			|| ($ff->{fieldId} eq '15') # 'Status-History' # ars_GetListEntryWithFields() -> [ERROR] (ORA-00904: "C15": invalid identifier) (ARERR #552)
+			|| ($ff->{dataType} =~/^($q)/)
+			|| ($ff->{fieldId} eq '15')	# 'Status-History' 
+							# ars_GetListEntryWithFields() -> [ERROR] (ORA-00904: "C15": invalid identifier) (ARERR #552)
 			|| (!$a{-xfields} ? 0 : ref($a{-xfields}) eq 'CODE' ? &{$a{-xfields}}($s, $ff) :  grep {($_ eq $ff->{fieldId}) || ($_ eq $ff->{fieldName})} @{$a{-xfields}})
 			? ()
 			: ($ff->{fieldId})
 			} sort keys %{$s->{-meta}->{$f}->{-fields}}]
-		: [map {  my $ff =$s->{-meta}->{$f}->{-fields}->{$_};
-			!$ff->{dataType} || !$ff->{fieldId}
-			|| ($ff->{dataType} =~/^(trim|control|table|column|page|attach)/)
-			|| ($ff->{fieldId} eq '15') # 'Status-History' # ars_GetListEntryWithFields() -> [ERROR] (ORA-00904: "C15": invalid identifier) (ARERR #552)
-			|| (!$a{-xfields} ? 0 : ref($a{-xfields}) eq 'CODE' ? &{$a{-xfields}}($s, $ff) :  grep {($_ eq $ff->{fieldId}) || ($_ eq $ff->{fieldName})} @{$a{-xfields}})
-			? ()
-			: ($ff->{fieldId})
-			} sort keys %{$s->{-meta}->{$f}->{-fields}}]
-		if $a{-fields} && !ref($a{-fields});
+ }
 
  $a{-fetch} =1	if $a{-fields} && !ref($a{-fields});
  delete $a{-fields}	if $a{-fetch};
@@ -1353,7 +1669,7 @@ sub query {	# ars_GetListEntry / ars_LoadQualifier
 	if 0;
 
  print $s->cpcon(join(";\n", split /\):\s/, $s->{-cmd})), "\n"
-	if $s->{-echo} ||$a{-echo};
+	if exists($a{-echo}) ? $a{-echo} : $s->{-echo};
 
  if ($c && $a{-fields} && !ref($a{-fields}->[0])) {
 	my $id;
@@ -1684,7 +2000,7 @@ sub entryIns {	# ars_CreateEntry
  my $f =$a{-schema} ||$a{-form} ||$a{-into};
  my $r;
  print $s->cpcon("entryIns(-form=>'$f')\n")
-	if $s->{-echo} ||$a{-echo};
+	if exists($a{-echo}) ? $a{-echo} : $s->{-echo};
  delete @a{qw(-schema -form -from -into -echo)};
  local $_;
  local $s->{-cmd} =($s->{-cmd} ? $s->{-cmd} .': ' : '') ."entryIns(-form=>'$f'," 
@@ -1737,7 +2053,7 @@ sub entryUpd {	# ars_SetEntry(ctrl,schema,entry_id,getTime,...)
  my $f =$a{-schema} ||$a{-form} ||$a{-into};
  my $id=$a{-id};
  print $s->cpcon("entryUpd(-form=>'$f',-id=>'$id')\n")
-	if $s->{-echo} ||$a{-echo};
+	if exists($a{-echo}) ? $a{-echo} : $s->{-echo};
  delete @a{qw(-schema -form -from -into -id -echo)};
  local $_;
  local $s->{-cmd} =($s->{-cmd} ? $s->{-cmd} .': ' : '') 
@@ -1774,13 +2090,41 @@ sub entryDel {	# ars_DeleteEntry
  my $f =$a{-schema} ||$a{-form} ||$a{-from} ||$a{-into};
  my $id=$a{-id};
  print $s->cpcon("entryDel(-form=>'$f',-id=>'$id')\n")
-	if $s->{-echo} ||$a{-echo};
+	if exists($a{-echo}) ? $a{-echo} : $s->{-echo};
  delete @a{qw(-schema -form -from -into -id -echo)};
  my $r =ARS::ars_DeleteEntry($s->{-ctrl}, $f, $id);
  return(&{$s->{-die}}($s->efmt($ARS::ars_errstr
 		,"entryDel(-form=>'$f',-id=>'$id')")))
 	 if !$r && $ARS::ars_errstr;
  $id
+}
+
+
+sub entryBLOB {	# BLOB field retrieve/update
+		# (-form=>form, -id=>entryId, -field=>fieldId|fieldName
+		# ,?-set=>data
+		# ,?-file=>filePath, ?-set=>boolean
+ my ($s, %a) =@_;
+ my $f =$a{-schema} ||$a{-form} ||$a{-from} ||$a{-into};
+ my $eu =!$a{-file} ? exists($a{-set}) : exists($a{-set}) ? $a{-set} : $a{-into};
+ if ($eu) {
+	return($s->entryUpd(-form=>$f, -id=>$a{-id}
+		, exists($a{-echo}) ? (-echo=>$a{-echo}) : ()
+		, $a{-field}
+		, {$a{-file}
+			? ('file'=>$a{-file}, 'size'=> -s $a{-file})
+			: ('buffer'=>$a{-set}, 'size'=> length($a{-set}))
+			}))
+ }
+ else {
+	my $r =ARS::ars_GetEntryBLOB($s->{-ctrl}, $f, $a{-id}
+		,$a{-field} =~/^\d+$/ ? $a{-field} : schdn($s,$f,$a{-field})->{fieldId}
+		,$a{-file} ? (ARS::AR_LOC_FILENAME(), $a{-file}) : (ARS::AR_LOC_BUFFER()));
+	return(&{$s->{-die}}($s->efmt($ARS::ars_errstr
+		,"entryBLOB(-form=>'$f',-id=>'" .$a{-id} ."',-field=>" .$a{-field} ."')")))
+		if !defined($r) && $ARS::ars_errstr;
+	return(!$a{-file} ? $r : $r ? $a{-id} : $r)
+ }
 }
 
 
@@ -1808,7 +2152,7 @@ sub dbiquery {	# DBI query
  my($s, @q) =@_;
  my(%a); while ($#q && ($q[0] =~/^-/)) {$a{$q[0]} =$q[1]; shift @q; shift @q};
  print $s->cpcon("dbiquery($q[0])\n")
-	if $s->{-echo} ||$a{-echo};
+	if exists($a{-echo}) ? $a{-echo} : $s->{-echo};
  my $op =$s->{-dbi}->prepare(@q)
 	|| return(&{$s->{-die}}($s->efmt($s->{-dbi}->errstr, undef, undef, 'dbiprepair',@q)));
  $op->execute()
@@ -1823,7 +2167,7 @@ sub dbido {	# DBI do
  my($s, @q) =@_;
  my(%a); while ($#q && ($q[0] =~/^-/)) {$a{$q[0]} =$q[1]; shift @q; shift @q};
  print $s->cpcon("dbiquery($q[0])\n")
-	if $s->{-echo} ||$a{-echo};
+	if exists($a{-echo}) ? $a{-echo} : $s->{-echo};
  $s->{-dbi}->do(@q)
 	|| &{$s->{-die}}($s->efmt($s->{-dbi}->errstr, undef, undef, 'dbido',@q));
 }
@@ -1832,6 +2176,619 @@ sub dbido {	# DBI do
 sub dbierrstr {	# Last DBI error
  $_[0]->{-dbi}->errstr
 }
+
+
+sub dbitables {	# DBI tables array
+ my ($s, $sch, $tbl) =@_;
+ my @t =$s->dbi()->tables('',$sch||$s->{-sqlschema}||'', $tbl||'%');
+ if (!scalar(@t) 
+ && (((ref($s->{-dbiconnect}) ? $s->{-dbiconnect}->[0] : $s->{-dbiconnect})||'') =~/^dbi:ADO:/i)) {
+	$sch =$sch||$s->{-sqlschema};
+	@t =$sch
+		? (map {$_ =~/\."*\Q$sch\E"*\./i ? ($_) : ()} $s->dbi()->tables())
+		: $s->dbi()->tables();
+ }
+ @t
+}
+
+
+sub dbicols {	# DBI table columns
+ my ($s, $sch, $tbl) =@_;
+ # my $st =$s->dbiquery('SHOW COLUMNS FROM ' .($sch ? $sch .'.' : '') .$tbl);
+ my $st =$s->dbi()->column_info('',$sch||$s->{-sqlschema}||'', $tbl||'','%');
+ @{$st->fetchall_arrayref({})}
+}
+
+
+sub dbitypespc { # DBI column type spec
+ my ($s, $d) =@_;
+ ($d->{'TYPE_NAME'} ||'unknown')
+ .($d->{'COLUMN_SIZE'}
+	? ' (' .join(',', map {defined($d->{$_}) ? $d->{$_} : ()
+		} 'COLUMN_SIZE', 'DECIMAL_DIGITS') .')'
+	: '')
+
+}
+
+sub dbidsmetasync {	# DBI datastore - sync meta with 'arsmetasql'
+ my ($s, %arg) =@_;	# (-echo)
+ return(undef) if !$s->{'-meta-sql'};
+ my $dbt ={map {!$_
+		? ()
+		: $_ =~/\."*([^."]+)"*$/
+		? (lc($1) => 1)
+		: (lc($_) => 1)
+	} $s->dbitables()};
+ foreach my $tbl (sort keys %{$s->{'-meta-sql'}}) {
+	my @sql;
+	if ($tbl =~/^-/) {
+		next
+	}
+	elsif (!$dbt->{$tbl}) {
+		push @sql, 'CREATE TABLE ' .join('.', map {defined($_) ? $_ : ()} $s->{-sqlschema}, $tbl)
+			." (\n"
+			.join("\n, "
+				, map {	$s->{'-meta-sql'}->{$tbl}->{-cols}->{$_}->{'TYPE_NAME'}
+					? '"' .$_ .'" ' .$s->dbitypespc($s->{'-meta-sql'}->{$tbl}->{-cols}->{$_})
+					.(($s->{'-meta-sql'}->{$tbl}->{-cols}->{$_}->{fieldId}||'') eq '1'
+						? " PRIMARY KEY"
+						: $s->{'-meta-sql'}->{$tbl}->{-cols}->{$_}->{IS_PK}
+						? " UNIQUE"
+						: '')
+					: ()
+					} sort keys %{$s->{'-meta-sql'}->{$tbl}->{-cols}})
+			.')'
+	}
+	else {
+		my $dbc ={map {	
+			!$_ ||!$_->{COLUMN_NAME}
+			? ()
+			: (lc($_->{COLUMN_NAME}) => $_)
+			} $s->dbicols('',$tbl)};
+		if (scalar(%$dbc)) {
+		my (@altc, @addc);
+		foreach my $col (sort keys %{$s->{'-meta-sql'}->{$tbl}->{-cols}}) {
+			my $cl =lc($col);
+			my $cm =$s->{'-meta-sql'}->{$tbl}->{-cols}->{$col};
+			next if !$cm->{'TYPE_NAME'};
+			if (!$dbc->{$cl}) {
+				push @addc, '"' .$col .'" ' .$s->dbitypespc($cm)
+			}
+			elsif (($dbc->{$cl}->{'TYPE_NAME'} ne $cm->{'TYPE_NAME'})
+				|| ($cm->{'TYPE_NAME'} ne 'datetime'
+					? (($dbc->{$cl}->{'COLUMN_SIZE'}||0) < ($cm->{'COLUMN_SIZE'}||0))
+					|| (($dbc->{$cl}->{'DECIMAL_DIGITS'}||0) ne ($cm->{'DECIMAL_DIGITS'}||0))
+					: 0 )
+				) {
+				push @altc, '"' .$col .'" ' .$s->dbitypespc($cm)
+			}
+			else {
+				$cm->{COLUMN_SIZE_DB} =$dbc->{$cl}->{'COLUMN_SIZE'}
+					if ($cm->{COLUMN_SIZE_DB}||0) ne ($dbc->{$cl}->{'COLUMN_SIZE'}||0);
+				$cm->{DECIMAL_DIGITS_DB} =$dbc->{$cl}->{'DECIMAL_DIGITS'}
+					if ($cm->{DECIMAL_DIGITS_DB}||0) ne ($dbc->{$cl}->{'DECIMAL_DIGITS'}||0);
+			}
+		}
+		foreach my $r (@addc) {
+			push @sql
+				,'ALTER TABLE '
+				.join('.', map {defined($_) ? $_ : ()} $s->{-sqlschema}, $tbl)
+				.' ADD ' .$r;
+		}
+		foreach my $r (@altc) {
+			push @sql
+				,'ALTER TABLE '
+				.join('.', map {defined($_) ? $_ : ()} $s->{-sqlschema}, $tbl)
+				.' ALTER COLUMN ' .$r;
+		}
+		}
+	}
+	foreach my $r (@sql) {
+		print "$r;\n" if exists($arg{-echo}) ? $arg{-echo} : $s->{-echo};
+		$s->dbi()->do($r)
+		|| &{$s->{-die}}($s->efmt($s->{-dbi}->errstr,$r,undef,'dbidsmetasync'));
+	}
+ }
+ $s;
+}
+
+
+sub dbidsrpl {	# DBI datastore - load data from ARS
+ my ($s, %arg) =@_;
+ $arg{-form}  =$arg{-from}  ||$arg{-schema}	if !$arg{-form};
+ $arg{-query} =$arg{-where} ||$arg{-qual}	if !$arg{-query};
+ $arg{-filter}=undef				if !$arg{-filter};
+ $arg{-lim_rf}=300				if !$arg{-lim_rf};
+ $arg{-lim_or}=40				if !$arg{-lim_or};
+ $arg{-fields}='*'				if !$arg{-fields};
+ # $arg{-echo}=0;
+ # $arg{-ckpush}=1;	# check db pushes into ARS (_arsobject_insert, _arsobject_update, _arsobject_delete)
+ # $arg{-ckdel}=0;	# check ARS deletes into db
+ # $arg{-ckupd}=1;	# check ARS updates into db
+ # $arg{-sleep}=0;
+ # $arg{-pk}=undef;
+ # $arg{-timestamp}=undef;
+ # $arg{-unused}=undef;
+ my $tbl =$s->sqlname($arg{-form});
+ my $tbc =join('.', map {defined($_) ? $_ : ()} $s->{-sqlschema}, $tbl);
+ my ($fpk, $fid, $fts, @flds);
+ my ($ci, $cu, $cd) =(0, 0, 0);
+ {      my $flds =$s->{'-meta-sql'}->{$tbl}->{-cols};
+	$fpk = $flds->{$arg{-pk}} if $arg{-pk};
+	$fts = $flds->{$arg{-timestamp}} if $arg{-timestamp};
+	foreach my $fn (sort keys %$flds) {
+		next 	if !$flds->{$fn}->{fieldName} || !$flds->{$fn}->{COLUMN_NAME}
+			|| !$flds->{$fn}->{TYPE_NAME};
+		$fpk =$flds->{$fn}	if !$fpk && $flds->{$fn}->{IS_PK} 
+					&& ($flds->{$fn}->{IS_PK} eq '1');
+		$fid =$flds->{$fn}	if !$fid && $flds->{$fn}->{IS_PK} 
+					&& ($flds->{$fn}->{IS_PK} eq '1');
+		$fts =$flds->{$fn}	if !$fts && $flds->{$fn}->{IS_TIMESTAMP};
+		push @flds, $flds->{$fn};
+	}
+	!$fpk && &{$s->{-die}}($s->efmt('PK not found','',undef,'dbidsrpl',$arg{-form}));
+	# !$fts && &{$s->{-die}}($s->efmt('Timestamp not found','',undef,'dbidsrpl',$arg{-form}));
+ }
+ $s->dbi() if !$s->{-dbi};
+ local $s->{-dbi}->{LongReadLen} =$s->{-dbi}->{LongReadLen} <= 1024 ? 4*64*1024 : $s->{-dbi}->{LongReadLen};
+ my $vts =$fts && $s->dbiquery('SELECT max(' .$fts->{COLUMN_NAME} .') FROM ' .$tbc)->fetchrow_arrayref();
+    $vts =$vts && $vts->[0];
+ if ($vts) {
+	my $cts =$s->dbiquery('SELECT COUNT(*) FROM ' .$tbc .' WHERE ' .$s->{-dbi}->quote_identifier($fts->{COLUMN_NAME}) .'=' .$s->{-dbi}->quote($vts))->fetchrow_arrayref();
+	$cts =$cts && $cts->[0];
+	if ($cts && ($arg{-lim_rf} <($cts +$arg{-lim_rf}/2))) {
+		$arg{-lim_rf} +=$cts;
+	}
+	$vts =$s->timestr($vts) if $vts =~/\s/;
+	$vts =$s->timestr($vts) if $vts =~/^(.+)\.0+$/;
+ }
+ if ($s->{'-meta-sql'}->{$tbl}->{-cols}->{_arsobject_insert}
+	&& (!exists($arg{-ckpush}) ||$arg{-ckpush})) {
+	local $s->{-strFields} =0;
+	my $sql ='SELECT * FROM ' .$tbc 
+		.' WHERE _arsobject_insert=1 OR _arsobject_update=1 OR _arsobject_delete=1'
+		.' ORDER BY ' .$s->{-dbi}->quote_identifier($fpk->{COLUMN_NAME}) .' asc';
+	print "$sql;\n" if exists($arg{-echo}) ? $arg{-echo} : $s->{-echo};
+	my $dbq =$s->dbiquery($sql);
+	my ($rd, @rq) =({});
+	while (($rd && ($rd =$dbq->fetchrow_hashref())) ||scalar(@rq)) {
+		if ($rd) {
+			push @rq, $rd;
+			next if scalar(@rq) <$arg{-lim_or};
+		}
+		else {
+			next if !scalar(@rq)
+		}
+		my $arq =join(' OR '
+			, map {	$_->{$fpk->{COLUMN_NAME}}
+					&& ($_->{_arsobject_update} ||$_->{_arsobject_delete})
+				? "'" .$fpk->{fieldName} ."'=" .$s->arsquot($_->{$fpk->{COLUMN_NAME}})
+				: () } @rq);
+		my %ars =$arq
+			? map { ($_->{$fpk->{fieldName}} => $_)
+				} $s->query(-form=>$arg{-form}
+				,-fields=>$arg{-fields}
+				,-echo=>$arg{-echo}
+				,-query=>join(' AND '
+					, $arg{-query} ? '(' .$arg{-query} .')' : ()
+					, $arq))
+			: ();
+		foreach my $rd (@rq) {
+			my $ra =$ars{$rd->{$fpk->{COLUMN_NAME}}};
+			my $rw ={};
+			foreach my $f (@flds) {
+				next	if !$f->{fieldName} || !$f->{COLUMN_NAME} || !$f->{TYPE_NAME}
+					|| !exists($rd->{$f->{COLUMN_NAME}})
+					|| !$f->{fieldId}
+					|| $f->{IS_JOINED} ||$f->{DISPLAY_ONLY}
+					|| $f->{IS_PK} 
+					|| (($f->{fieldId}||'') =~/^(1|2|3|5|6|15|179)$/);
+				$rd->{$f->{COLUMN_NAME}} =$1
+							if defined($rd->{$f->{COLUMN_NAME}})
+							&& ($f->{TYPE_NAME} =~/^(?:datetime|float)$/)
+							&& ($rd->{$f->{COLUMN_NAME}}=~/^(.+)\.0+$/);
+				$rd->{$f->{COLUMN_NAME}} =defined($ra->{$f->{fieldName}}) && ($ra->{$f->{fieldName}} =~/\.(\d+)$/)
+							? sprintf('%.' .length($1) .'f', $rd->{$f->{COLUMN_NAME}})
+							: $rd->{$f->{COLUMN_NAME}} =~/^(.+)\.0+$/
+							? $1
+							: $rd->{$f->{COLUMN_NAME}}
+							if $ra
+							&& ($f->{TYPE_NAME} eq 'float')
+							&& defined($rd->{$f->{COLUMN_NAME}});
+				$rw->{$f->{fieldName}} =!defined($rd->{$f->{COLUMN_NAME}})
+							? $rd->{$f->{COLUMN_NAME}}
+							: $f->{TYPE_NAME} eq 'datetime'
+							? timestr($s, $rd->{$f->{COLUMN_NAME}})
+							: $rd->{$f->{COLUMN_NAME}};
+			}
+			if ($rd->{_arsobject_delete}) {
+				$rd->{_arsobject_insert} =$rd->{_arsobject_update} =undef;
+				next	if $arg{-filter}
+					&& !&{$arg{-filter}}($s,\%arg,$s->{'-meta-sql'}->{$tbl},$rw,$rd);
+				sleep($arg{-sleep} ||0);
+				$cd++;
+				$s->entryDel(-form=>$arg{-form}, -echo=>$arg{-echo}
+						,-id=>$rd->{$fid->{COLUMN_NAME}});
+			}
+			elsif ($rd->{_arsobject_update}) {
+				$rd->{_arsobject_insert} =$rd->{_arsobject_delete} =undef;
+				next	if $arg{-filter}
+					&& !&{$arg{-filter}}($s,\%arg,$s->{'-meta-sql'}->{$tbl},$rw,$rd);
+				$rw ={map {	!defined($rw->{$_}) && !defined($ra->{$_})
+						? ()
+						: !defined($rw->{$_}) ||!defined($ra->{$_})
+						? ($_ => $rw->{$_})
+						: $rw->{$_} ne $ra->{$_}
+						? ($_ => $rw->{$_})
+						: ()
+						} keys %$rw}
+					if $ra;
+				if (scalar(%$rw)) {
+					sleep($arg{-sleep} ||0);
+					$cu++;
+					$s->entryUpd(-form=>$arg{-form}, -echo=>$arg{-echo}
+						,-id=>$rd->{$fid->{COLUMN_NAME}}
+						, %$rw);
+				}
+			}
+			elsif ($rd->{_arsobject_insert}) {
+				$rd->{_arsobject_update} =$rd->{_arsobject_delete} =undef;
+				next	if $arg{-filter}
+					&& !&{$arg{-filter}}($s,\%arg,$s->{'-meta-sql'}->{$tbl},$rw,$rd);
+				sleep($arg{-sleep} ||0);
+				$ci++;
+				$s->entryIns(-form=>$arg{-form}, -echo=>$arg{-echo}
+					, map {defined($rw->{$_}) ? ($_ => $rw->{$_}) : ()} keys %$rw);
+			}
+			my $sql ='UPDATE ' .$tbc .' SET '
+				.join(', ', map { !exists($rd->{$_})
+						? ()
+						: ($s->{-dbi}->quote_identifier($_) .' =NULL')
+						} '_arsobject_insert','_arsobject_update', '_arsobject_delete')
+				.' WHERE ' .$s->{-dbi}->quote_identifier($fpk->{COLUMN_NAME}) .' =' .$s->{-dbi}->quote($rd->{$fpk->{COLUMN_NAME}});
+			print "$sql;\n" if exists($arg{-echo}) ? $arg{-echo} : $s->{-echo};
+			$s->{-dbi}->do($sql)
+			|| &{$s->{-die}}($s->efmt($s->{-dbi}->errstr,$sql,undef,'dbidsrpl',$arg{-form}));
+		}
+		@rq =();
+	}
+ }	
+ if ($arg{-ckdel}) {
+	my $sql ='SELECT ' .$s->{-dbi}->quote_identifier($fpk->{COLUMN_NAME}) 
+		.' FROM ' .$tbc 
+		.($s->{'-meta-sql'}->{$tbl}->{-cols}->{_arsobject_insert}
+			? ' WHERE _arsobject_insert IS NULL OR _arsobject_insert=0'
+			: '')
+		.' ORDER BY 1 asc';
+	print "$sql;\n" if exists($arg{-echo}) ? $arg{-echo} : $s->{-echo};
+	my $dbq =$s->dbiquery($sql);
+	my $dbr =[];
+	my @cnd;
+	my @rms;
+	while (($dbr && ($dbr =$dbq->fetchrow_arrayref())) ||scalar(@cnd)) {
+		if ($dbr) {
+			push @cnd, $dbr->[0] =~/^([^\s]+)/i ? $1 : $dbr->[0];
+		}
+		if ($dbr ? scalar(@cnd) >=$arg{-lim_or} : scalar(@cnd)) {
+			my %ars =map { ($_->{$fpk->{fieldName}} => 1)
+				} $s->query(-form=>$arg{-form}
+				,-fields=>[$fpk->{fieldName}]
+				,-echo=>$arg{-echo}
+				,-query=>join(' AND '
+					, $arg{-query} ? '(' .$arg{-query} .')' : ()
+					, join(' OR ', map {"'" .$fpk->{fieldName} ."'=" .$s->arsquot($_)
+						} @cnd))
+				);
+			my @del =map {	$ars{$_}
+					? ()
+					: !$arg{-filter} || &{$arg{-filter}}($s,\%arg,$s->{'-meta-sql'}->{$tbl},undef,$_)
+					? $_
+					: ()
+					} @cnd;
+			if (scalar(@del)) {
+				$sql ="DELETE FROM $tbc WHERE "
+					.join(' OR ', map {$s->{-dbi}->quote_identifier($fpk->{COLUMN_NAME}) .'=' .$s->{-dbi}->quote($_)
+							} @del);
+				push @rms, $sql;
+				$cd +=scalar(@del);
+			}
+			@cnd =();
+			sleep($arg{-sleep} ||0);
+		}
+	}
+	foreach $sql (@rms) {
+				print "$sql;\n" if exists($arg{-echo}) ? $arg{-echo} : $s->{-echo};
+				$@ ='Unknown error';
+				$s->{-dbi}->do($sql)
+				|| &{$s->{-die}}($s->efmt($s->{-dbi}->errstr,$sql,undef,'dbidsrpl',$arg{-form}));
+	}
+ }
+ if (!exists($arg{-ckupd}) || $arg{-ckupd}) {
+	my $sqlm=0;
+	local $s->{-strFields} =0;
+	my $fpksql ='SELECT * FROM ' .$tbc .' WHERE ' .$fpk->{COLUMN_NAME} .'=';
+	my ($rw, $rd) =({});
+	my ($cs, $cw) =(0,0);
+	while (1) {
+	  $cw++;
+	  foreach my $r ($s->query(-form=>$arg{-form}
+		,-fields=>$arg{-fields}
+		,-echo=>$arg{-echo}
+		,-query=>join(' AND ', map {$_ ? $_ : ()
+			} $arg{-query}, $fts && $vts ? "'" .$fts->{fieldName} ."'>=" .$vts : ()
+			) ||'1=1'
+		,-order=>$fts	? [$fts->{fieldName} => 'asc'] 
+				: [$fpk->{fieldName} => 'asc']
+		,-limit=>$arg{-lim_rf}
+		,-start=>$cs
+		)) {
+		$cs++;
+		next if !$r->{$fpk->{fieldName}};
+		my $sql ='';
+		$rd =$s->dbiquery($fpksql .$s->{-dbi}->quote($r->{$fpk->{fieldName}}))->fetchrow_hashref();
+		my $ru;
+		foreach my $f (@flds) {
+			next	if !$f->{fieldName} || !$f->{COLUMN_NAME} || !$f->{TYPE_NAME}
+				|| !exists($r->{$f->{fieldName}});
+			$rw->{$f->{fieldName}} =!defined($r->{$f->{fieldName}})
+						? $r->{$f->{fieldName}}
+						: $f->{TYPE_NAME} eq 'datetime'
+						? strtime($s, $r->{$f->{fieldName}})
+						: ($f->{dataType} =~/^(?:char)$/) && $f->{COLUMN_SIZE}
+						? substr($r->{$f->{fieldName}}, 0, $f->{COLUMN_SIZE_DB} ||$f->{COLUMN_SIZE})
+						: $r->{$f->{fieldName}};
+			$rd->{$f->{COLUMN_NAME}} =$1
+						if $rd
+						&& defined($rd->{$f->{COLUMN_NAME}})
+						&& ($f->{TYPE_NAME} =~/^(?:datetime|float)$/)
+						&& ($rd->{$f->{COLUMN_NAME}}=~/^(.+)\.0+$/);
+			$rd->{$f->{COLUMN_NAME}} =defined($rw->{$f->{fieldName}}) && ($rw->{$f->{fieldName}} =~/\.(\d+)$/)
+						? sprintf('%.' .length($1) .'f', $rd->{$f->{COLUMN_NAME}})
+						: $rd->{$f->{COLUMN_NAME}} =~/^(.+)\.0+$/
+						? $1
+						: $rd->{$f->{COLUMN_NAME}}
+						if $rd 
+						&& defined($rd->{$f->{COLUMN_NAME}})
+						&& ($f->{TYPE_NAME} eq 'float');
+			$rd->{$f->{COLUMN_NAME}} =substr($rd->{$f->{COLUMN_NAME}}, 0, $f->{COLUMN_SIZE_DB} ||$f->{COLUMN_SIZE})
+						if $rd
+						&& defined($rd->{$f->{COLUMN_NAME}})
+						&& ($f->{dataType} =~/^(?:char)$/) && $f->{COLUMN_SIZE};
+			$ru =1			if $rd
+						&& (defined($rd->{$f->{COLUMN_NAME}})
+							? !defined($rw->{$f->{fieldName}}) 
+								|| ($rd->{$f->{COLUMN_NAME}} ne $rw->{$f->{fieldName}})
+							: defined($rw->{$f->{fieldName}}));
+		}
+		if (!$rd) {
+			next	if $arg{-filter}
+				&& !&{$arg{-filter}}($s,\%arg,$s->{'-meta-sql'}->{$tbl},$rw,$rd);
+			$sql ='INSERT INTO ' .$tbc .' ('
+				.join(', '
+					, map { !exists($rw->{$_->{fieldName}})
+						|| !defined($rw->{$_->{fieldName}})
+						? ()
+						: $s->{-dbi}->quote_identifier($_->{COLUMN_NAME})
+						} @flds)
+				.') VALUES ('
+				.join(', '
+					, map { !exists($rw->{$_->{fieldName}})
+						|| !defined($rw->{$_->{fieldName}})
+						? ()
+						: $s->{-dbi}->quote($rw->{$_->{fieldName}})
+						} @flds)
+				.')';
+				$ci++;
+		}
+		elsif ($ru) {
+			next	if (!exists($arg{-ckpush}) ||$arg{-ckpush})
+				&& ($rd->{'_arsobject_insert'}
+				||  $rd->{'_arsobject_update'}
+				||  $rd->{'_arsobject_delete'});
+			next	if $arg{-filter}
+				&& !&{$arg{-filter}}($s,\%arg,$s->{'-meta-sql'}->{$tbl},$rw,$rd);
+			$sql ='UPDATE ' .$tbc .' SET '
+				.join(', '
+					,(exists($arg{-ckpush}) && !$arg{-ckpush}
+						&& $s->{'-meta-sql'}->{$tbl}->{-cols}->{_arsobject_insert}
+						? '_arsobject_insert=NULL, _arsobject_update=NULL, _arsobject_delete=NULL'
+						: ())
+					, map { !exists($rw->{$_->{fieldName}})
+						? ()
+						: ($s->{-dbi}->quote_identifier($_->{COLUMN_NAME}) .' ='
+							.(!defined($rw->{$_->{fieldName}})
+							? 'NULL'
+							: $s->{-dbi}->quote($rw->{$_->{fieldName}})
+							))
+						} @flds)
+				.' WHERE ' .$s->{-dbi}->quote_identifier($fpk->{COLUMN_NAME}) .' =' .$s->{-dbi}->quote($rw->{$fpk->{fieldName}});
+			$cu++
+		}
+		if ($sql) {
+			# local $s->{-dbi}->{LongTruncOk} =1;
+			print "$sql;\n" if exists($arg{-echo}) ? $arg{-echo} : $s->{-echo};
+			$s->{-dbi}->do($sql) 
+			|| &{$s->{-die}}($s->efmt($s->{-dbi}->errstr,$sql,undef,'dbidsrpl',$arg{-form}));
+		}
+	  }
+	  if (!$fts && ($cs == $cw *$arg{-lim_rf})) {
+		sleep($arg{-sleep} ||0);
+		next;
+	  }
+	  last;
+	}
+	if ($arg{-unused} && ($fts ? $vts : 1)) {
+		my $sql ='DELETE FROM ' .$tbc .' WHERE ' 
+			.dbidsqq($s
+				, $vts && $fts ? '(' .$fts->{COLUMN_NAME} .'<' .$s->{-dbi}->quote($s->strtime($vts||0)) .') AND (' .$arg{-unused} .')' : $arg{-unused}
+				, $s->{'-meta-sql'}->{$tbl});
+		print "$sql;\n" if exists($arg{-echo}) ? $arg{-echo} : $s->{-echo};
+		my $n=	$s->{-dbi}->do($sql) 
+			|| &{$s->{-die}}($s->efmt($s->{-dbi}->errstr,$sql,undef,'dbidsrpl',$arg{-form}));
+		$cd +=$n;
+	}
+ }
+ join(', ', map {$_ ? $_ : ()} $ci && "new $ci", $cu && "upd $cu", $cd && "del $cd")
+	||'up-to-date'
+}
+
+
+sub dbidsquery {	# DBI datastore - query data alike ARS
+ my ($s, %arg) =@_;
+ # -form => ARS form	|| -from => sql table name
+ # -fields=> ARS fields || -select=>sql select list
+ # -query=> ARS query	|| -where => sql where
+ # -order => 
+ # -filter=> undef
+ # -undefs=>1
+ # -strFields=>1|0
+ my $m =$s->{'-meta-sql'}->{$s->sqlname($arg{-form})};
+ my $sql =join(' ', 'SELECT'
+	,(ref($arg{-fields})
+		? join(', ', map {$s->{-dbi}->quote_identifier($m->{-fields}->{$_} || $m->{-ids}->{$_} || $_)
+			} @{$arg{-fields}})
+		: $arg{-fields} && ($arg{-fields} ne '*')
+		? dbidsqq($s, $arg{-fields}, $m)
+		: ($arg{-fields} ||$arg{-select} ||'*')
+		)
+	,'FROM'
+	,($arg{-from}
+		? $arg{-from}
+		: join('.', map {defined($_) ? $_ : ()} $s->{-sqlschema}, $s->sqlname($arg{-form})))
+	,($arg{-where}
+		? 'WHERE ' .$arg{-where}
+		: $arg{-query}
+		? 'WHERE ' .dbidsqq($s, $arg{-query}, $m)
+		: '')
+	,(ref($arg{-order})
+		? 'ORDER BY '
+			.(do{	my $r ='';
+				my $i =0;
+				foreach my $e (@{$arg{-order}}) {
+					$r .=	$i && ($e =~/^(asc|1)$/)
+						? ' asc'
+						: $i && ($e =~/^(desc|2)$/)
+						? ' desc'
+						: (($r ? ',' : '')
+							.$s->{-dbi}->quote_identifier($m->{-fields}->{$e} || $m->{-ids}->{$e} || $e)
+							);
+					$i =!$i;
+				}
+				$r})
+		: $arg{-order}
+		? ('ORDER BY ' .$arg{-order})
+		: '')
+	);
+ print "$sql;\n" if exists($arg{-echo}) ? $arg{-echo} : $s->{-echo};
+ local $s->{-dbi}->{LongReadLen} =$s->{-dbi}->{LongReadLen} <= 1024 ? 4*64*1024 : $s->{-dbi}->{LongReadLen};
+ my $h =$s->dbiquery($sql); 
+ my $xu=exists($arg{-undefs}) && !$arg{-undefs};
+ my $yc=$arg{-select} ||ref($arg{-fields}) 
+	|| ($arg{-fields} && ($arg{-fields} eq '*'));
+ my $ys=defined($arg{-strFields}) ? $arg{-strFields} : $s->{-strFields};
+ local $s->{-strFields} =defined($arg{-strFields}) ? $arg{-strFields} : $s->{-strFields};
+ my ($r, $r1, @r);
+ while ($r =$h->fetchrow_hashref()) {
+	$r1 ={map {	$xu && !defined($r->{$_})
+			? ()
+			: $m->{-cols}->{$_} && $m->{-cols}->{$_}->{fieldName} && $m->{-cols}->{$_}->{fieldId}
+			? ($m->{-cols}->{$_}->{fieldName}
+				=> 
+				(!defined($r->{$_})
+					? $r->{$_}
+					: $ys && ($m->{-cols}->{$_}->{dataType} eq 'enum')
+					? $s->strOut($arg{-form}, $m->{-cols}->{$_}->{fieldId}, $r->{$_})
+					: ($m->{-cols}->{$_}->{TYPE_NAME} =~/^(?:datetime|float)$/) && ($r->{$_} =~/^(.+)\.0+$/)
+					? $1
+					: $r->{$_}))
+			: $yc
+			? ($_ => $r->{$_})
+			: ()
+		} keys %$r};
+	next if $arg{-filter} && !&{$arg{-filter}}($s,$r1);
+	push @r, $r1;
+ }
+ @r
+}
+
+
+sub dbidsqq {	# DBI datastore - quote/parse condition to SQL names
+ my ($s,$sf,$mh) =@_;	# (self, query string, default sql metadata)
+ if (0) {
+	my $q =substr($s->{-dbi}->quote_identifier(' '),0,1);
+	$sf =~s/$q([^$q]+)$q\.$q([^$q]+)$q/!$s->{'-meta-sql'}->{-forms}->{$1} ? "?1$q$1${q}.$q$2$q" : $s->{'-meta-sql'}->{$s->{'-meta-sql'}->{-forms}->{$1}}->{-fields}->{$2} ? $s->{-dbi}->quote_identifier($s->{'-meta-sql'}->{-forms}->{$1}) .'.' .$s->{-dbi}->quote_identifier($s->{'-meta-sql'}->{$s->{'-meta-sql'}->{-forms}->{$1}}->{-fields}->{$2}) : $s->{'-meta-sql'}->{$s->{'-meta-sql'}->{-forms}->{$1}}->{-ids}->{$2} ? $s->{-dbi}->quote_identifier($s->{'-meta-sql'}->{-forms}->{$1}) .'.' .$s->{-dbi}->quote_identifier($s->{'-meta-sql'}->{$s->{'-meta-sql'}->{-forms}->{$1}}->{-ids}->{$2}) : "?2$q$1${q}.$q$2$q"/ge;
+	$sf =~s/$q([^$q]+)$q/$s->{'-meta-sql'}->{-forms}->{$1} ? ($s->{-sqlschema} ? $s->{-dbi}->quote_identifier($s->{-sqlschema}) .'.' : '') .$s->{-dbi}->quote_identifier($s->{'-meta-sql'}->{-forms}->{$1}) : $mh->{-fields}->{$1} ? $s->{-dbi}->quote_identifier($mh->{-fields}->{$1}) : $mh->{-ids}->{$1} ? $s->{-dbi}->quote_identifier($mh->{-ids}->{$1}) : "$q$1$q"/ge;
+	return($sf);	
+ }
+ my $qs =$s->{-dbi}->quote('w') =~/^([^w]+)w/ ? $1 : "'";
+ my $qi =$s->{-dbi}->quote_identifier('w') =~/^([^w]+)w/ ? $1 : '"';
+ my $qsq=$s->{-dbi}->quote("'w") =~/^([^w]+)w/ ? $1 : "''";
+ my $qiq=$s->{-dbi}->quote_identifier('"w') =~/^([^w]+)w/ ? $1 : '""';
+ my $qit=$qi .'.' .$qi;
+ my $sr ='';
+ my $m =undef;
+ while ($sf =~/^(.*?)(\Q$qs\E|\Q$qi\E)(.*)/) {
+	if ($2 eq $qi) {
+		$sr .=$1 .$2;
+		$sf =$3;
+		my ($st,$sn) =('','');
+		while (1) {
+			if (!($sf =~/^(.*?)(\Q$qiq\E|\Q$qit\E|\Q$qi\E)(.*)/)) {
+				return($sr .($st ? $st .$qit : '') .$sn .$sf)
+			}
+			elsif ($2 eq $qiq) {
+				$sn .=$1 .$2;
+				$sf =$3;
+				next
+			}
+			elsif ($2 eq $qit) {
+				$st =$sn .$1;
+				$sn ='';
+				$sf =$3;
+				next
+			}
+			else {
+				$sn .=$1;
+				$sf =$3;
+				$st =$st && $s->{'-meta-sql'}->{-forms}->{$st} || $st;
+				$sn =$st && $s->{'-meta-sql'}->{$st}
+					? ($s->{'-meta-sql'}->{$st}->{-fields}->{$sn}
+					|| $s->{'-meta-sql'}->{$st}->{-ids}->{$sn}
+					|| $sn)
+					: ($mh->{-fields}->{$sn}
+					|| $mh->{-ids}->{$sn}
+					|| ($s->{'-meta-sql'}->{-forms}->{$sn}
+						&& (($s->{-sqlschema} ? $s->{-sqlschema} .$qit : '')
+							.$s->{'-meta-sql'}->{-forms}->{$sn}))
+					|| $sn);
+				$sr .=($st ? $st .$qit : '') .$sn .$qi;
+				last
+			}
+		}
+	}
+	elsif ($2 eq $qs) {
+		$sr .=$1 .$2;
+		$sf =$3;
+		while (1) {
+			if (!($sf =~/^(.*?)(\Q$qsq\E|\Q$qs\E)(.*)/)) {
+				return($sr .$sf)
+			}
+			elsif ($2 eq $qsq) {
+				$sr .=$1 .$2;
+				$sf =$3;
+				next
+			}
+			else {
+				$sr .=$1 .$2;
+				$sf =$3;
+				last
+			}
+		}
+	}
+ }
+ $sr .$sf
+}
+
 
 
 sub cgi {	# CGI object
@@ -2215,46 +3172,39 @@ sub smtpsend {	# SMTP mail msg send
 
 sub soon {	# Periodical execution of this script
 		# (minutes ||sub{}, ?log file, ?run command, ?soon command)
-		# minutes: undef - clear sched || sub{} -> number
+		# minutes: undef - clear sched, run once || sub{} -> number
 		# log file: empty || full file name || var file name
 		# run  command: empty || 'command line' || [command line] || sub{}
 		# soon command: empty || 'command line' || [command line] || []
 		# empty run command - only soon command will be scheduled
 		# empty soon command - sleep(minutes*60) will be used
+		# !defined(minutes) - soon command will be deleted from schedule 
+		#	and run command will be executed once
+		# [soon command,... [arg,...],...] - schedule cleaning hint:
+		#	join(' ',@{[soon,...arg]}) used to clean schedule
+		#	join('', @{[arg,...]}) used in soon command
  my ($s, $mm, $lf, $cr, $cs) =@_;
  $lf =$s->vfname($lf) if $lf && ($lf !~/[\\\/]/);
- my $r =1;
+ my $wl;
  if (ref($cs) ? scalar(@$cs) : $cs) {
-	my $qry =$cs;
-	if (ref($cs)) {
-		return(&{$s->{-die}}("MSWin32 required for `at` in soon()\n"))
-			if $^O ne 'MSWin32';
-		$cs->[0] =Win32::GetFullPathName($cs->[0])
-			if ($^O eq 'MSWin32') && ($cs->[0] !~/[\\\/]/);
-		$cs->[0] = $cs->[0]=~/^(.+?)[^\\\/]+$/ ? $1 .'perl.exe' : $cs->[0]
-			if $cs->[0] =~/\.dll$/i;
-		# for(my $i=1; $i <=$#$cs; $i++) {
-		#	next if $cs->[$i] =~/^[-\\\/]/;
-		#	$cs->[$i] =Win32::GetFullPathName($cs->[$i])
-		#		if ($^O eq 'MSWin32');
-		#	last;
-		# }
-		$qry =join(' ', @$cs);
+	return(&{$s->{-die}}("MSWin32 required for `at` in soon()\n"))
+		if $^O ne 'MSWin32';
+	if (defined($mm) && ($^O eq 'MSWin32') && eval('use Win32::Event; 1')) {
+		# MSDN: 'CreateEvent', 'Kernel Object Namespaces'
+		my $q =_sooncl($s, $cs, 1);
+		my $n =$q;
+		   $n =~s/[\\]/!/g;
+		$wl =Win32::Event->new(0,0,$n);
+		if ($wl && $^E && ($^E ==183)) {
+			print "Already '$q', done.\n";
+			$s->fstore(">>$lf", "\n" .$s->strtime() ."\t$$\tAlready '$q', done.\n")
+				if $lf;
+			return(0);
+		}
 	}
-	print "Starting '$qry'...\n" if defined($mm);
-	$s->fstore(">>$lf", "\n" .$s->strtime() ."\t$$\tStarting '$qry'...\n")
-		if $lf && defined($mm);
-	foreach my $l (`at`) {
-		next if $l !~/\Q$qry\E[\w\d\s]*[\r\n]*$/i;
-		next if $l !~/(\d+)/;
-		my $v =$1;
-		my $cmd ="at $v /d";
-		print("$cmd # $l\n");
-		$s->fstore(">>$lf", $s->strtime() ."\t$$\t$cmd # $l\n")
-			if $lf;
-		system($cmd);
-	}
+	_sooncln($s, $mm, $lf, $wl ? '' : $cr, $cs, 1);
  }
+ my $r =1;
  while (1) {
 	if (!$cr) {
 	}
@@ -2280,12 +3230,6 @@ sub soon {	# Periodical execution of this script
 				if ($^O eq 'MSWin32') && ($cr->[0] !~/[\\\/]/);
 			$cr->[0] = $cr->[0]=~/^(.+?)[^\\\/]+$/ ? $1 .'perl.exe' : $cr->[0]
 				if $cr->[0] =~/\.dll$/i;
-			# for(my $i=1; $i <=$#$cr; $i++) {
-			#	next if $cr->[$i] =~/^[-\\\/]/;
-			#	$cr->[$i] =Win32::GetFullPathName($cr->[$i])
-			#		if ($^O eq 'MSWin32');
-			#	last;
-			# }
 			$cmd =join(' ', @$cr);
 		}
 		if ($lf) {
@@ -2305,20 +3249,23 @@ sub soon {	# Periodical execution of this script
 				print("Error $!\n");
 			}
 		}
-
-
 	}
-	last if $cs;
+	last if $cs || !defined($mm);
 	my $mmm =ref($mm) eq 'CODE' ? &$mm($s) : $mm;
-	print "sleep($mmm)...\n";
-	$s->fstore(">>$lf", $s->strtime() ."\t$$\tsleep($mmm)...\n")
+	print "sleep(", $mmm *60, ")...\n";
+	$s->fstore(">>$lf", $s->strtime() ."\t$$\tsleep(" .($mmm*60) .")...\n")
 		if $lf;
 	sleep($mmm *60);
  }
  if (defined($mm) && (ref($cs) ? scalar(@$cs) : $cs)) {
-	my $t1 =$s->strtime($s->timeadd(time(),0,0,0,0, ref($mm) eq 'CODE' ? &$mm($s) : $mm));
+	_sooncln($s, $mm, $lf, $cr, $cs, 0) if !$wl;
+	my $t1 =$s->strtime($s->timeadd(
+		sprintf('%.0f', time()/60) *60
+		, 0,0,0,0
+		, ref($mm) eq 'CODE' ? &$mm($s) : $mm
+		));
 	$t1 =$1 if $t1 =~/\s([^\s]+)/;
-	my $cmd ="at $t1 /interactive " .(ref($cs) ? join(' ', @$cs) : $cs);
+	my $cmd ="at $t1 /interactive " ._sooncl($s, $cs);
 	print("$cmd\n");
 	$s->fstore(">>$lf", $s->strtime() ."\t$$\t$cmd\n")
 		if $lf;
@@ -2331,6 +3278,59 @@ sub soon {	# Periodical execution of this script
  $r
 }
 
+
+
+sub _sooncl {	# soon() command line former
+ my ($s, $cs, $q) =@_;
+ my $nc;
+ my $qry =$cs;
+ if (ref($cs)) {
+	return(&{$s->{-die}}("MSWin32 required for `at` in soon()\n"))
+		if $^O ne 'MSWin32';
+	$cs->[0] =Win32::GetFullPathName($cs->[0])
+		if ($^O eq 'MSWin32') && ($cs->[0] !~/[\\\/]/);
+	$cs->[0] = $cs->[0]=~/^(.+?)[^\\\/]+$/ ? $1 .'perl.exe' : $cs->[0]
+		if $cs->[0] =~/\.dll$/i;
+	$qry =$q ? join(' ', map {   $nc
+				? ()
+				: !defined($_)
+				? '""'
+				: ref($_)
+				? (do{$nc =$_->[0]})
+				: $_
+				} @$cs)
+		: join(' ', map {!defined($_) ? '""' : ref($_) ? join('', @$_) : $_
+				} @$cs);
+ }
+ $qry
+}
+
+
+sub _sooncln {	# soon() cleaner
+ my ($s, $mm, $lf, $cr, $cs, $strt) =@_;
+ $lf =$s->vfname($lf) if $lf && ($lf !~/[\\\/]/);
+ if (ref($cs) ? scalar(@$cs) : $cs) {
+	my $nc;
+	my $qry =_sooncl($s, $cs, 1);
+	print "Starting '$qry'...\n" if $strt && defined($mm);
+	$s->fstore(">>$lf", "\n" .$s->strtime() ."\t$$\tStarting '$qry'...\n")
+		if $strt && $lf && defined($mm);
+	sleep(int(rand(20))) if $strt && defined($mm) && $cr;
+	foreach my $l (`at`) {
+		next if $nc
+			? $l !~/\Q$qry\E/i
+			: $l !~/\Q$qry\E[\w\d\s]*[\r\n]*$/i;
+		next if $l !~/(\d+)/;
+		my $v =$1;
+		my $cmd ="at $v /d";
+		print("$cmd # $l\n");
+		$s->fstore(">>$lf", $s->strtime() ."\t$$\t$cmd # $l\n")
+			if $lf;
+		system($cmd);
+	}
+ }
+ 1
+}
 
 
 sub cfpinit {	# Field Player: init data structures
@@ -2366,6 +3366,24 @@ sub cfpinit {	# Field Player: init data structures
 	}
 	else {
 		@$f{keys %$dh} =values %$dh;
+		if ($f->{-metadb} && $f->{-formdb} && $s->{-meta} && $s->{-meta}->{$f->{-formdb}}) {
+			my $fm =$f->{-metadb};
+			$fm =	($fm =~/^\d+$/ 
+					? $s->{-meta}->{$f->{-formdb}}->{-fldids}->{$fm}
+					: $s->{-meta}->{$f->{-formdb}}->{-fields}->{$fm})
+				|| &{$s->{-die}}($s->efmt('Field not found',$s->{-cmd},undef,'cfpinit',$f->{-formdb},$f->{-metadb}));
+			$f->{-name}   =$fm->{fieldName} if !$f->{-name};
+			$f->{-namelbl}=$fm->{fieldLbll} if !exists($f->{-namelbl});
+			$f->{-values} =schvals($s, $f->{-formdb}, $fm)
+				if !($f->{-values} ||$f->{-labels})
+				&& schvals($s, $f->{-formdb}, $fm);
+			$f->{-labels} =schlblsl($s, $f->{-formdb}, $fm)
+				if !$f->{-labels}
+				&& schlbls($s, $f->{-formdb}, $fm);
+			$f->{-value}  =$fm->{defaultVal}
+				if !exists($f->{-value})
+				&& exists($fm->{defaultVal});
+		}
 		if (!$f->{-namecgi}) {
 			$f->{-namecgi} =$f->{-name};
 			$f->{-namecgi} =~s/[\s-]/_/g
@@ -2383,7 +3401,9 @@ sub cfpinit {	# Field Player: init data structures
 			&& !($f->{-values} ||$f->{-labels})
 			&& schvals($s, $f->{-formdb}, $f->{-namedb});
 
-		$f->{-labels} =schlbls($s, $f->{-formdb}, $f->{-namedb})
+		$f->{-labels} =$s->{-strFields} && ($s->{-strFields} ==2)
+				? schlblsl($s, $f->{-formdb}, $f->{-namedb})
+				: schlbls($s, $f->{-formdb}, $f->{-namedb})
 			if $f->{-namedb} && $f->{-formdb}
 			&& !$f->{-labels}
 			&& schlbls($s, $f->{-formdb}, $f->{-namedb});
@@ -3025,39 +4045,37 @@ sub cfprun {	# Field Player: run
  local $s->{-fpmsg} =$cmsg;
  my $err;
  my $act;
+ my $acd;
  my $aec;
  my $arv;
- my $key;
  foreach my $f (@{$s->{-fpl}}) {
 	next	if (ref($f) ne 'HASH')
 		|| (exists($f->{-used}) && !$f->{-used});
 	if ($f->{-preact} && ($f->{-preact} !~/^\d$/) && cfpvv($s, $f)) {
-		$act =[] if !$act ||$key;
+		$act =[] if !$act;
 		push @$act, $f
 	}
 	if ($f->{-action} && ($f->{-action} !~/^\d$/) && cfpvv($s, $f)) {
 		$aec =cfpvv($s, $f);
 	}
-	if ($f->{-preact} || $f->{-action}) {
-		$key =undef
-	}
-	elsif ($f->{-key}) {
-		$key =1;
-	}
 	if ($f->{-key} && $act && !$err) {
 		$arv =1;
+		$acd =1;
 		foreach my $a (@$act) {
 			$arv =cfpaction($s, $a, '-preact', $arv, $f);
 			next if $arv;
 			$err =$@;
+			$act =undef;
 			last
 		}
 		if (!$arv) {
 			&$emsg($s, $err ||"Unknown 'cfpaction' error");
 			$err =1;
+			$act =undef;
 			last;
 		}
 	}
+	$act =undef if $f->{-key};
 	next if !cfpused($s, $f);
 	my $fn =cfpn($s, $f);
 	if (!$f->{-reset}
@@ -3171,37 +4189,35 @@ sub cfprun {	# Field Player: run
  }
  return(undef)
 	if $err;
- $act =	$arv =$key =undef;
+ $act =	$acd =$arv =undef;
  foreach my $f (@{$s->{-fpl}}) {
 	next	if (ref($f) ne 'HASH')
 		|| (exists($f->{-used}) && !$f->{-used});
 	next if !cfpused($s, $f);
 	if ($f->{-action} && ($f->{-action} !~/^\d$/) && cfpvv($s, $f)) {
-		$act =[] if !$act ||$key;
+		$act =[] if !$act;
 		push @$act, $f
-	}
-	if ($f->{-preact} || $f->{-action}) {
-		$key =undef
-	}
-	elsif ($f->{-key}) {
-		$key =1;
 	}
 	if ($f->{-key} && $act && !$err) {
 		$arv =1;
+		$acd =1;
 		foreach my $a (@$act) {
 			print &$cmsg($s, 'Executing', ($a->{-namelbl} ||$a->{-namecgi} ||'') .' ', $arv)
 				if $a->{-namelbl} ||$a->{-namecgi};
 			$arv =cfpaction($s, $a, '-action', $arv, $f);
 			next if $arv;
 			$err =$@;
+			$act =undef;
 			last;
 		}
 		if (!$arv) {
 			&$emsg($s, $err ||"Unknown 'cfpaction' error");
 			$err =1;
+			$act =undef;
 			last;
 		}
 	}
+	$act =undef if $f->{-key};
  }
  if ($act) {
 	print &$cmsg($s, 'Done', $err ? ('Error', $@) : ('Success', $arv))
@@ -3209,7 +4225,7 @@ sub cfprun {	# Field Player: run
  return(undef)
 	if $err;
  return(1)
-	if $act;
+	if $acd;
  foreach my $f (@{$s->{-fpl}}) {
 	next	if (ref($f) ne 'HASH')
 		|| (exists($f->{-used}) && !$f->{-used});
@@ -3308,18 +4324,22 @@ sub cfprun {	# Field Player: run
 		? $s->cgiselect(-name=>$f->{-namecgi}, -title=>$f->{-namecmt}
 			, -id => $f->{-namecgi}
 			, -onchange=>1			
-			, map {defined($f->{$_}) ? ($_=>$f->{$_}) : ()} qw(-values -labels -onchange -readonly -disabled -class -style))
+			, map {	my $v =ref($f->{$_}) eq 'CODE' ? &{$f->{$_}}($s, $f, cfpvv($s, $f), cfpvp($s, $f)) : $f->{$_};
+				defined($v) ? ($_=>$v) : ()} qw(-values -labels -onchange -readonly -disabled -class -style))
 		: $f->{-rows}
 		? $s->cgitext(-name=>$f->{-namecgi}, -title=>$f->{-namecmt}
 			, -id => $f->{-namecgi}
-			, map {defined($f->{$_}) ? ($_=>$f->{$_}) : ()} qw(-rows -columns -maxlength -readonly -class -style))
+			, map {	my $v =ref($f->{$_}) eq 'CODE' ? &{$f->{$_}}($s, $f, cfpvv($s, $f), cfpvp($s, $f)) : $f->{$_};
+				defined($v) ? ($_=>$v) : ()} qw(-rows -columns -maxlength -readonly -class -style))
 		: $f->{-action} ||$f->{-preact}
 		? $s->{-cgi}->submit(-name=>$f->{-namecgi}, -title=>$f->{-namecmt}, -value=>$f->{-namelbl}
 			, -id => $f->{-namecgi}
-			, map {defined($f->{$_}) ? ($_=>$f->{$_}) : ()} qw(-class -style))
+			, map {	my $v =ref($f->{$_}) eq 'CODE' ? &{$f->{$_}}($s, $f, cfpvv($s, $f), cfpvp($s, $f)) : $f->{$_};
+				defined($v) ? ($_=>$v) : ()} qw(-class -style))
 		: $s->cgistring(-name=>$f->{-namecgi}, -title=>$f->{-namecmt}
 			, -id => $f->{-namecgi}
-			, map {defined($f->{$_}) ? ($_=>$f->{$_}) : ()} qw(-size -maxlength -readonly -disabled -class -style))
+			, map {	my $v =ref($f->{$_}) eq 'CODE' ? &{$f->{$_}}($s, $f, cfpvv($s, $f), cfpvp($s, $f)) : $f->{$_};
+				defined($v) ? ($_=>$v) : ()} qw(-size -maxlength -readonly -disabled -class -style))
 			)
 	)
 	. (!$f->{-widget1}

@@ -97,7 +97,7 @@ C<dbiconnect>(C<-dbiconnect>); C<-dbi>
 =item Metadata
 
 C<connect>; C<arsmeta>, C<arsmetamin>; C<schema>,...; C<lsflds>;
-C<-schema>, C<-meta>, C<-metax>, C<-metadn>, C<-metaid>, C<-schgen>, C<-schfdo>, C<-strFields>;
+C<-schema>, C<-meta>/C<-meta-min>/C<-meta-sql>, C<-metax>, C<-metadn>, C<-metaid>, C<-schgen>, C<-schfdo>, C<-strFields>;
 C<Variable files>
 
 
@@ -110,7 +110,7 @@ C<vfname>, C<vfload>, C<vfstore>, C<vfclear>, C<vfdata>, C<vfhash>, C<vfdistinct
 
 =item ARS methods
 
-C<connect>, C<query>, C<entry>, C<entryNew>, C<entryIns>, C<entryUpd>, C<entryDel>, C<AUTOLOAD>;
+C<connect>, C<query>, C<entry>, C<entryNew>, C<entryIns>, C<entryUpd>, C<entryDel>, C<entryBLOB>, C<AUTOLOAD>;
 
 C<-strFields>, C<strIn>, C<strOut>;
 
@@ -150,6 +150,16 @@ C<smtp>, C<-smtp>, C<smtpconnect>, C<-smtphost>; C<smtpsend>
 
 
 
+=item SQL Data Store Methods
+
+C<arsmetasql>, C<sqlname>, C<dbidsmetasync>, C<dbidsrpl>, C<dbidsquery>;
+
+C<-meta-sql>; C<-sqlschema>;
+
+C<-sqlname>, C<-sqlntbl>, C<-sqlncol>, C<-sqlninc>
+
+
+
 =item CGI Form Presenter
 
 C<-fpl> => [-formdb=>'...',-record=>'...', {action field},.. {view/edit field},.., {button field},..}]
@@ -182,7 +192,7 @@ C<cfprun>, C<cfpaction>, C<cfpv>, C<cfpvv>, C<cfpvl>, C<cfpvp>
 
 (for each field inside C<CGI Form Presenter - Fields>)
 
-C<-name>, C<-namecgi>, C<-namedb> => 'field name'
+C<-name>, C<-namecgi>, C<-namedb>, C<-metadb> => 'field name'
 
 C<-namelbl>, C<-namecmt> => 'text for user'
 
@@ -389,7 +399,7 @@ See also C<-warn>.
 Definitions of fields:
 list of field in order to be evaluated,
 field definitions by cgi names,
-field definitions by ARS db names.
+field definitions by ARS names.
 
 
 
@@ -453,6 +463,16 @@ Name of the field containg value for this field.
 
 
 
+=item -metadb
+
+	=> not exists || 'ARS field name'
+
+(C<CGI Form Presenter - Field Definitions>)
+ARS field name to be used for field metadata:
+C<-name>, C<-namelbl>, C<-labels>, C<-value>, etc.
+
+
+
 =item -name
 
 	=> not exists || 'common field name'
@@ -463,7 +483,7 @@ Name of the field containg value for this field.
 
 =item -namedb
 
-	=> not exists || 'ARS db field name'
+	=> not exists || 'ARS field name'
 
 =item -namelbl
 
@@ -534,6 +554,29 @@ This sub{}s may use C<strOut>() and C<strIn> methods.
 Field parameters to exclude from C<-meta> to decrease memory usage.
 
 
+=item -meta-min
+
+(C<Metadata>)
+
+Used by C<arsmetamin> internally.
+
+
+=item -meta-sql
+
+	=> undef || {SQL Data Store metadata}
+
+(C<Metadata>, C<SQL Data Store Methods>, C<Variable files>)
+SQL Data Store metadata loaded or refreshed by C<arsmetasql>()/C<sqlname>():
+
+{tableName}->{-cols}->{sqlName}=>{fieldName, sqlName,...}
+
+{tableName}->{-fields}->{fieldName}=>sqlName
+
+{tableName}->{-ids}->{fieldId}=>sqlName
+
+{-forms}->{formName}->{tableName}
+
+
 =item -preact
 
 	=> not exists
@@ -600,7 +643,7 @@ Include display only fields (AR_FIELD_OPTION_DISPLAY) into schema.
 =item C<-schgen> 
 
 	=> 1 || 0 
-	|| 2 || [schema,...]
+	|| 2 || 3 || [schema,...]
 
 (C<Metadata>)
 Cache metadata from ARS server using C<vfname>(C<-meta>)?
@@ -609,6 +652,7 @@ Or each session get metadata from ARS server.
 	0 - get metadata from server, do not use cache file.
 	1 - generate cache file if not exists, else load this file.
 	2 - renew schema definitions using timestamps.
+	3 - renew schema always.
 	[schema,...] - list of schemas to renew.
 
 
@@ -625,6 +669,53 @@ Or each session get metadata from ARS server.
 L<Net::SMTP|Net/SMTP> utility object and connect specification to create it.
 See also C<smtp> and C<smtpconnect> methods.
 
+
+=item -sqlname
+
+	=> undef || sub{}(self, ARS name) -> SQL name
+
+(C<SQL Data Store Methods>)
+sub{} to escape ARS name to the SQL name, 
+may be used instead of C<-sqlntbl> and C<-sqlncol>.
+See also C<-sqlninc>.
+See 'sub sqlnesc' in the source code as an example.
+
+
+=item -sqlncol
+
+	=> undef || sub{}(self, ARS field name) -> SQL col name
+
+(C<SQL Data Store Methods>)
+sub{} to escape ARS field name to the SQL column name, see also C<-sqlntbl>, C<-sqlninc>.
+See 'sub sqlnesc' in the source code as an example.
+
+
+=item -sqlninc
+
+	=> undef || sub{}(self, SQL name) -> SQL name incremented
+
+(C<SQL Data Store Methods>)
+sub{} to increment SQL name, used after C<-sqlname>/C<-sqlntbl>/C<-sqlncol>
+when the same SQL name already exists.
+See 'sub sqlninc' in the source code as an example.
+
+
+=item -sqlntbl
+
+	=> undef || sub{}(self, ARS form name) -> SQL table name
+
+
+(C<SQL Data Store Methods>)
+sub{} to escape ARS form name to the SQL table name, see also C<-sqlncol>, C<-sqlninc>.
+See 'sub sqlnesc' in the source code as an example.
+
+
+=item -sqlschema
+
+	=> undef || SQL schema name
+
+(C<SQL Data Store Methods>)
+SQL schema name for C<dbidsmetasync>(), C<dbidsrpl>(), C<dbidsquery>().
 
 
 =item -storable
@@ -652,11 +743,12 @@ ARS server name to connect
 
 =item -strFields
 
-	=> 1 || 0
+	=> 1 || 0 || 2
 
 (C<ARS methods>)
-Translate ARS field values using metadata and conversion sub{}s
-(C<-meta>, C<-metaid>, C<-metadn>)?
+Translate ARS field values using metadata and conversion sub{}s.
+1 - using 'enumLimits' and C<strtime>/C<timestr>('yyyy-mm-dd hh:mm:ss'), 
+2 - using at first localisation metadata for enum fields ('fieldLbvl').
 
 
 
@@ -852,8 +944,33 @@ See also C<arsmetamin>.
 Refresh minimal ARS metadata set (C<vfstore>(C<-meta-min>)) after C<connect>/C<arsmeta> call.
 Load minimal ARS metadata instead of or after C<connect>/C<arsmeta> call.
 Loading of minimal metadata set is faster then loading all metadata with C<arsmeta>.
-Minimal metadata set includes explicit 'enumLimits'.
+Minimal metadata set includes explicit 'enumLimits' and 'time' fields.
 
+Synopsis: Refreshing C<-meta-min>:
+
+	$s->set(-schgen =>3);
+	$s->connect();
+	$s->arsmetamin();
+
+
+=item arsmetasql (-param => value,...)
+
+(C<Metadata>, C<SQL Data Store Methods>)
+
+Load SQL Data Store metadata or refresh this from ARS metadata after C<connect>/C<arsmeta> call.
+The SQL Data Store is intended for data replicated from ARS using C<dbidsrpl>() calls.
+Database table and column names are escaped ARS form and field names.
+Metadata is stored in C<-meta-sql> variable file.
+
+Synopsis: Refreshing C<-meta-sql>:
+
+	$s->set(-schgen =>3);
+	$s->connect();
+	$s->dbi();
+	$s->arsmetasql();
+	$s->dbidsmetasync();
+
+See also C<sqlname>(), C<dbidsmetasync>(), C<dbidsrpl>(), C<dbidsquery>()
 
 
 =item arsquot (string) -> escaped and quoted for ARS
@@ -1032,6 +1149,90 @@ Use -echo=>1 to output command to STDOUT.
 
 
 
+=item dbidsmetasync (-echo => 0 || 1)
+
+(C<Metadata>, C<SQL Data Store Methods>)
+
+Sync SQL Data Store schema with metadata generated by C<arsmetasql>().
+Uses C<dbi>(), C<-meta-sql>, C<-sqlschema>.
+Calls C<dbido>('CREATE TABLE...') and C<dbido>('ALTER TABLE...').
+
+
+
+=item dbidsrpl (-param => value)
+
+(C<SQL Data Store Methods>)
+
+Replicate ARS data to the SQL Data Store.
+Uses C<dbi>(), C<-meta-sql>, C<-sqlschema>.
+Parameters:
+
+-echo => undef || 0 || 1
+
+-form => ARS form name
+
+-fields => undef || '*' || fields to replicate, alike C<query>(-fields)
+
+-query => undef || ARS query string
+
+-filter => undef || filter sub{}(self, {args}, {-meta-sql}->{tableName}, {ARS record}, {Data Store record}) -> allow
+
+-lim_rf => undef || max number of records read from ARS, C<query>(-limit).
+The number of the records fetched really may be incremented by counting timestamps duplicated.
+Without timestamps, additional queries will be invoked when '-lim_rf' records fetched.
+
+-lim_or => undef || max number of 'OR keyField=keyValue' pairs
+
+-pk => undef || primary key ARS field name, default is obtained from C<-meta-sql>
+
+-timestamp => undef || 'Modified Date' timestamp ARS field name, default is obtained from C<-meta-sql>
+
+-ckpush => undef || 1 || 0 - insert, update, delete ARS records according to '_arsobject_insert', '_arsobject_update', '_arsobject_delete' column values.
+
+-ckdel => undef || 0 || 1 - check records deleted from ARS and replicate deletions to the Data Store,
+this is expensive and slow, so default if off.
+
+-ckupd => undef || 1 || 0 - check and replicate updates from ARS to the Data Store,
+based on timestamps of records if availeble
+
+-unused => undef || SQL where clause part to delete unused records from Data Store table. "ARS field name"s and "ARS form name"s may be used.
+
+-sleep => undef || seconds to L<perlfunc::sleep|perlfunc> between calls to ARS.
+
+
+
+=item dbidsquery (-param => value) -> ({fieldName => fieldValue,...},...)
+
+(C<SQL Data Store Methods>)
+
+Query data from SQL Data Store.
+Uses C<dbi>(), C<-meta-sql>, C<-sqlschema>.
+Any C<dbi>() method may be used for SQL Data Store, 
+but C<dbidsquery> understands "ARS form name"s and "ARS field name"s
+in addition to "sql table name"s and "sql column name"s.
+Records are returned as hash refs with ARS field names available,
+otherwise SQL column names.
+Parameters:
+
+-echo => undef || 0 || 1
+
+-form => ARS form name
+
+-fields => undef || '*' || 'SQL SELECT clause' || [fieldName ||fieldId ||colName,...].
+Empty value requests all fields, '*' - all fields or columns.
+
+-query => undef || SQL WHERE clause
+
+-filter => undef || filter sub{}(self, {fieldName => fieldValue,...}) -> allow
+
+-order => [fieldName||fieldId => 1||2,... colName||colNumber => 'asc'||'desc',...] || 'SQL ORDER BY clause'
+
+-undefs => undef || 1 || 0 - include undefined values to records returned
+
+"ARS form name", "ARS field name", "ARS form name"."ARS field name" may be used
+in '-fields' and '-query'.
+
+
 =item dbierrstr () -> dbi->errstr
 
 (C<Error Processing and Echo>)
@@ -1110,6 +1311,32 @@ Parameters:
 -for => {} # steady hash to store each entry fetched
 
 -echo=>1 # output command to STDOUT
+
+
+
+=item entryBLOB (-form=>form, -id=>entryId, -field=>fieldId|fieldName) -> data
+
+=item entryBLOB (..., -set=>data) -> id
+
+=item entryBLOB (..., -file=>path, ?-set=>1) -> id
+
+
+(C<ARS methods>)
+Retrieve BLOB field using ARS::ars_GetEntryBLOB()
+or update BLOB field using C<entryUpd>().
+Parameters:
+
+-form | -schema | -from | -into  => schema or form name
+
+-id=>entryId
+
+-echo=>1 # output command to STDOUT
+
+-field=>fieldId | fieldName
+
+-file=>path, -set=>boolean # when using file for BLOB field data
+
+-set=>data # when updating BLOB field from scalar data
 
 
 
@@ -1270,7 +1497,8 @@ Parameters:
 
 -fields => '*' | '*-$' | 1, -xfields=>sub{}(self, field) || [fieldName| fieldId,...]
 # result set is hash refs for each record, ARS::ars_GetListEntryWithFields() used.
-# use '*-$' to excude currency fields.
+# use '*-$' to excude currency and attachment fields.
+# use '*-f' to excude attachment fields.
 
 -fetch => '*' | 1 | [fieldId|fieldName,...]
 # result set is hash refs for each record, ars_GetEntry() used for each row, this is slow.
@@ -1312,6 +1540,8 @@ strIn(form, fieldName, value) - to encode value for '-where'
 =item schvals (schema, field name | id | meta) -> [itemNumber,...] || undef
 
 =item schlbls (schema, field name | id | meta) -> {itemNumber => itemName,...} || undef
+
+=item schlblsl (schema, field name | id | meta) -> {itemNumber => localised itemName,...} || undef
 
 (C<Metadata>)
 Access to ARS metadata loaded by C<connect>, C<arsmeta>, C<arsmetamin>.
@@ -1359,7 +1589,17 @@ Execute the script periodically, run command immediately, soon command after del
 Log file name may be full file name, else C<vfname>(file name) will be used.
 If run command is empty, soon command will be scheduled.
 If soon command is empty, sleep(minutes*60) will be used, otherwise 'at' MSWin32 scheduling command.
-If !defined(minutes), soon command will be deleted from schedule.
+If !defined(minutes), soon command will be deleted from schedule and run command will be executed once.
+
+
+
+=item sqlname (formName, ?fieldName, ?forceMetaUpd) -> sql name
+
+(C<Metadata>, C<SQL Data Store Methods>)
+
+Get SQL Data Store table or column name converted from ARS form and field name.
+Used by C<arsmetasql>().
+Uses C<-sqlname>, C<-sqlntbl>, C<-sqlncol>, C<-sqlninc> settings.
 
 
 
@@ -1521,6 +1761,38 @@ If '-slotName-storable' => switch specified, it will be used instead of C<-stora
 =head1 VERSION
 
 =over
+
+
+=head2 2012-05-16
+
+Publishing 0.56 version
+
+
+=head2 2012-04-24
+
+Added field localisation metadata, see source code for 'fieldLbll' and 'fieldLbvl'.
+
+Updated C<lsflds>().
+
+Added C<schlblsl>().
+
+Added C<-strFields> => 2 - translate ARS enum field values using at first
+localisation metadata ('fieldLbvl').
+
+Extended C<arsmetamin>() data with 'time' fields.
+
+Added C<-metadb> to C<CGI Form Presenter - Field Definitions>.
+
+
+
+=head2 2012-03-23
+
+New C<SQL Data Store Methods>
+
+
+=head2 2011-10-26
+
+New C<entryBLOB>
 
 
 =head2 2011-09-27
