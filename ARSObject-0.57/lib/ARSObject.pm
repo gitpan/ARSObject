@@ -14,9 +14,9 @@ use UNIVERSAL;
 use strict;
 use POSIX qw(:fcntl_h);
 
-$VERSION = '0.56';
+$VERSION = '0.57';
 
-my $fretry =5;
+my $fretry =8;
 
 1;
 
@@ -2307,8 +2307,12 @@ sub dbidsrpl {	# DBI datastore - load data from ARS
  # $arg{-ckupd}=1;	# check ARS updates into db
  # $arg{-sleep}=0;
  # $arg{-pk}=undef;
- # $arg{-timestamp}=undef;
+ # $arg{-timestamp}=undef;	# field name || 0
  # $arg{-unused}=undef;
+ # $arg{-master}
+ # $arg{-master_pk}
+ # $arg{-master_fk}
+ # $arg{-master_ts}
  my $tbl =$s->sqlname($arg{-form});
  my $tbc =join('.', map {defined($_) ? $_ : ()} $s->{-sqlschema}, $tbl);
  my ($fpk, $fid, $fts, @flds);
@@ -2327,17 +2331,34 @@ sub dbidsrpl {	# DBI datastore - load data from ARS
 		push @flds, $flds->{$fn};
 	}
 	!$fpk && &{$s->{-die}}($s->efmt('PK not found','',undef,'dbidsrpl',$arg{-form}));
+	$fts =undef if defined($arg{-timestamp}) && !$arg{-timestamp};
 	# !$fts && &{$s->{-die}}($s->efmt('Timestamp not found','',undef,'dbidsrpl',$arg{-form}));
  }
  $s->dbi() if !$s->{-dbi};
  local $s->{-dbi}->{LongReadLen} =$s->{-dbi}->{LongReadLen} <= 1024 ? 4*64*1024 : $s->{-dbi}->{LongReadLen};
  my $vts =$fts && $s->dbiquery('SELECT max(' .$fts->{COLUMN_NAME} .') FROM ' .$tbc)->fetchrow_arrayref();
     $vts =$vts && $vts->[0];
+ my $cts =0;
  if ($vts) {
-	my $cts =$s->dbiquery('SELECT COUNT(*) FROM ' .$tbc .' WHERE ' .$s->{-dbi}->quote_identifier($fts->{COLUMN_NAME}) .'=' .$s->{-dbi}->quote($vts))->fetchrow_arrayref();
-	$cts =$cts && $cts->[0];
-	if ($cts && ($arg{-lim_rf} <($cts +$arg{-lim_rf}/2))) {
+	my $sql ='SELECT count(*) FROM ' .$tbc .' WHERE ' .$s->{-dbi}->quote_identifier($fts->{COLUMN_NAME}) .'=' .$s->{-dbi}->quote($vts);
+	$cts =$s->dbiquery($sql)->fetchrow_arrayref();
+	$cts =$cts && $cts->[0] ||0;
+	print "$sql --> $cts;\n" if exists($arg{-echo}) ? $arg{-echo} : $s->{-echo};
+	if (!$cts) {
+	}
+	elsif (0 && ($cts > $arg{-lim_rf})) {
+		$cts -=1;
+	}
+	elsif ($cts >= $arg{-lim_rf} *2) {
+		$cts -=$arg{-lim_rf};
+		$arg{-lim_rf} *=2;
+	}
+	elsif ($cts >= $arg{-lim_rf}) {
 		$arg{-lim_rf} +=$cts;
+		$cts =0;
+	}
+	else {
+		$cts =0;
 	}
 	$vts =$s->timestr($vts) if $vts =~/\s/;
 	$vts =$s->timestr($vts) if $vts =~/^(.+)\.0+$/;
@@ -2371,7 +2392,7 @@ sub dbidsrpl {	# DBI datastore - load data from ARS
 				,-echo=>$arg{-echo}
 				,-query=>join(' AND '
 					, $arg{-query} ? '(' .$arg{-query} .')' : ()
-					, $arq))
+					, "($arq)"))
 			: ();
 		foreach my $rd (@rq) {
 			my $ra =$ars{$rd->{$fpk->{COLUMN_NAME}}};
@@ -2440,12 +2461,15 @@ sub dbidsrpl {	# DBI datastore - load data from ARS
 				$s->entryIns(-form=>$arg{-form}, -echo=>$arg{-echo}
 					, map {defined($rw->{$_}) ? ($_ => $rw->{$_}) : ()} keys %$rw);
 			}
-			my $sql ='UPDATE ' .$tbc .' SET '
-				.join(', ', map { !exists($rd->{$_})
+			my $sql = $rd->{_arsobject_insert} || $rd->{_arsobject_delete}
+				? ('DELETE FROM ' .$tbc 
+					.' WHERE ' .$s->{-dbi}->quote_identifier($fpk->{COLUMN_NAME}) .' =' .$s->{-dbi}->quote($rd->{$fpk->{COLUMN_NAME}}))
+				: ('UPDATE ' .$tbc .' SET '
+					.join(', ', map { !exists($rd->{$_})
 						? ()
 						: ($s->{-dbi}->quote_identifier($_) .' =NULL')
 						} '_arsobject_insert','_arsobject_update', '_arsobject_delete')
-				.' WHERE ' .$s->{-dbi}->quote_identifier($fpk->{COLUMN_NAME}) .' =' .$s->{-dbi}->quote($rd->{$fpk->{COLUMN_NAME}});
+					.' WHERE ' .$s->{-dbi}->quote_identifier($fpk->{COLUMN_NAME}) .' =' .$s->{-dbi}->quote($rd->{$fpk->{COLUMN_NAME}}));
 			print "$sql;\n" if exists($arg{-echo}) ? $arg{-echo} : $s->{-echo};
 			$s->{-dbi}->do($sql)
 			|| &{$s->{-die}}($s->efmt($s->{-dbi}->errstr,$sql,undef,'dbidsrpl',$arg{-form}));
@@ -2454,18 +2478,22 @@ sub dbidsrpl {	# DBI datastore - load data from ARS
 	}
  }	
  if ($arg{-ckdel}) {
-	my $sql ='SELECT ' .$s->{-dbi}->quote_identifier($fpk->{COLUMN_NAME}) 
-		.' FROM ' .$tbc 
-		.($s->{'-meta-sql'}->{$tbl}->{-cols}->{_arsobject_insert}
-			? ' WHERE _arsobject_insert IS NULL OR _arsobject_insert=0'
-			: '')
-		.' ORDER BY 1 asc';
-	print "$sql;\n" if exists($arg{-echo}) ? $arg{-echo} : $s->{-echo};
-	my $dbq =$s->dbiquery($sql);
+	my $cnl ='';
 	my $dbr =[];
-	my @cnd;
-	my @rms;
-	while (($dbr && ($dbr =$dbq->fetchrow_arrayref())) ||scalar(@cnd)) {
+	while ($dbr) {
+	  my $sql ='SELECT ' .$s->{-dbi}->quote_identifier($fpk->{COLUMN_NAME}) 
+		.' FROM ' .$tbc 
+		.($cnl ||$s->{'-meta-sql'}->{$tbl}->{-cols}->{_arsobject_insert}
+			? ' WHERE ' .join(' AND ', map {$_ ? "($_)" : ()
+				} ($s->{'-meta-sql'}->{$tbl}->{-cols}->{_arsobject_insert} ? '_arsobject_insert IS NULL OR _arsobject_insert=0' : '')
+				, ($cnl ? $s->{-dbi}->quote_identifier($fpk->{COLUMN_NAME}) .'<=' .$s->{-dbi}->quote($cnl) : ''))
+			: '')
+		.' ORDER BY 1 desc';
+	  print "$sql;\n" if exists($arg{-echo}) ? $arg{-echo} : $s->{-echo};
+	  my $dbq =$s->dbiquery($sql);
+	  my @cnd;
+	  my @rms;
+	  while (($dbr && ($dbr =$dbq->fetchrow_arrayref())) ||scalar(@cnd)) {
 		if ($dbr) {
 			push @cnd, $dbr->[0] =~/^([^\s]+)/i ? $1 : $dbr->[0];
 		}
@@ -2476,8 +2504,8 @@ sub dbidsrpl {	# DBI datastore - load data from ARS
 				,-echo=>$arg{-echo}
 				,-query=>join(' AND '
 					, $arg{-query} ? '(' .$arg{-query} .')' : ()
-					, join(' OR ', map {"'" .$fpk->{fieldName} ."'=" .$s->arsquot($_)
-						} @cnd))
+					, '(' .join(' OR ', map {"'" .$fpk->{fieldName} ."'=" .$s->arsquot($_)
+						} @cnd) .')')
 				);
 			my @del =map {	$ars{$_}
 					? ()
@@ -2486,6 +2514,7 @@ sub dbidsrpl {	# DBI datastore - load data from ARS
 					: ()
 					} @cnd;
 			if (scalar(@del)) {
+				$cnl =$del[$#del];
 				$sql ="DELETE FROM $tbc WHERE "
 					.join(' OR ', map {$s->{-dbi}->quote_identifier($fpk->{COLUMN_NAME}) .'=' .$s->{-dbi}->quote($_)
 							} @del);
@@ -2494,33 +2523,117 @@ sub dbidsrpl {	# DBI datastore - load data from ARS
 			}
 			@cnd =();
 			sleep($arg{-sleep} ||0);
+			if (scalar(@del)) {
+				$dbq->finish();
+				last;
+			}
 		}
-	}
-	foreach $sql (@rms) {
+	  }
+	  foreach $sql (@rms) {
 				print "$sql;\n" if exists($arg{-echo}) ? $arg{-echo} : $s->{-echo};
 				$@ ='Unknown error';
 				$s->{-dbi}->do($sql)
 				|| &{$s->{-die}}($s->efmt($s->{-dbi}->errstr,$sql,undef,'dbidsrpl',$arg{-form}));
+	  }
 	}
  }
  if (!exists($arg{-ckupd}) || $arg{-ckupd}) {
 	my $sqlm=0;
 	local $s->{-strFields} =0;
 	my $fpksql ='SELECT * FROM ' .$tbc .' WHERE ' .$fpk->{COLUMN_NAME} .'=';
+	my $lm;
+	if ($arg{-master} && $arg{-master_fk} && $fts) {
+		my $mtb =$s->sqlname($arg{-master});
+		my $mts =$arg{-master_ts} && ($s->{'-meta-sql'}->{$mtb}->{-fields}->{$arg{-master_ts}} ||$arg{-master_ts});
+		my $mpk =$arg{-master_pk} && ($s->{'-meta-sql'}->{$mtb}->{-fields}->{$arg{-master_pk}} ||$arg{-master_pk});
+		my $mfk =$arg{-master_fk} && ($s->{'-meta-sql'}->{$tbl}->{-fields}->{$arg{-master_fk}} ||$arg{-master_fk});
+		if (!$mts ||!$mpk) {
+			my $flds =$s->{'-meta-sql'}->{$tbl}->{-cols};
+			foreach my $fn (sort keys %$flds) {
+				$mts =$fn if !$mts && $flds->{$fn}->{IS_TIMESTAMP};
+				$mpk =$fn if !$mpk && $flds->{$fn}->{IS_PK}
+						&& ($flds->{$fn}->{IS_PK} eq '1');
+				last if $mts && $mpk;
+			}
+		}
+		my $sql ='SELECT max(d.' .$s->{-dbi}->quote_identifier($fts->{COLUMN_NAME}) .')'
+				.', max(m.' .$s->{-dbi}->quote_identifier($mts) .')'
+			.' FROM '
+			.join('.', map {defined($_) ? $_ : ()} $s->{-sqlschema}, $mtb)
+			." m, $tbc d"
+			.' WHERE m.' .$s->{-dbi}->quote_identifier($mpk)
+			.'=d.' .$s->{-dbi}->quote_identifier($mfk);
+		my $mtv = $s->dbiquery($sql)->fetchrow_arrayref();
+		print "$sql --> " .($mtv ? join(', ', map {$s->{-dbi}->quote(defined($_) ? $_ : 'undef')} @$mtv) : "'undef'") .";\n"
+				if exists($arg{-echo}) ? $arg{-echo} : $s->{-echo};
+		$mtv =!$mtv ||!$mtv->[0] ||!$mtv->[1]
+			? ''
+			: $mtv->[0] lt $mtv->[1]
+			? $mtv->[0]
+			: $mtv->[1];
+		$sql ='SELECT count(*) FROM '
+			.join('.', map {defined($_) ? $_ : ()} $s->{-sqlschema}, $mtb)
+			.' WHERE '
+			.$s->{-dbi}->quote_identifier($mts) .'=' .$s->{-dbi}->quote($mtv);
+		my $mtc =$s->dbiquery($sql)->fetchrow_arrayref();
+		$mtc =$mtc && $mtc->[0] ||0;
+		my $mpv =$mtc >=($arg{-lim_rf} -$arg{-lim_rf} *0.1)
+			? $s->dbiquery('SELECT max(m.' .$s->{-dbi}->quote_identifier($mpk) .'), count(*)'
+				.' FROM '
+				.join('.', map {defined($_) ? $_ : ()} $s->{-sqlschema}, $mtb)
+				." m, $tbc d"
+				.' WHERE m.' .$s->{-dbi}->quote_identifier($mpk)
+				.'=d.' .$s->{-dbi}->quote_identifier($mfk)
+				.' AND m.' .$s->{-dbi}->quote_identifier($mts) .'=' .$s->{-dbi}->quote($mtv)
+				)->fetchrow_arrayref()
+			: '';
+		$mpv =$mpv && $mpv->[0] ||'';
+		print "$sql --> $mtc;\n"
+			if $mpv && (exists($arg{-echo}) ? $arg{-echo} : $s->{-echo});
+		$sql ='SELECT ' .$s->{-dbi}->quote_identifier($mpk)
+			.' FROM '
+			.join('.', map {defined($_) ? $_ : ()} $s->{-sqlschema}, $mtb)
+			.($mtv
+			? ' WHERE ' .$s->{-dbi}->quote_identifier($mts)
+				.'>=' .$s->{-dbi}->quote($mtv)
+				.($mpv 
+				 ? ' AND ' .$s->{-dbi}->quote_identifier($mpk)
+					.'>=' .$s->{-dbi}->quote($mpv)
+				 : '')
+			: '')
+			.' ORDER BY ' .$s->{-dbi}->quote_identifier($mts) .' ASC '
+			.', ' .$s->{-dbi}->quote_identifier($mpk) .' ASC ';
+		print "$sql;\n" if exists($arg{-echo}) ? $arg{-echo} : $s->{-echo};
+		$lm =$s->{-dbi}->selectcol_arrayref($sql,{'MaxRows'=>$arg{-lim_rf}});
+		return(&{$s->{-die}}($s->efmt($s->{-dbi}->errstr, undef, undef, 'selectcol_arrayref',$sql)))
+			if !$lm && $s->{-dbi}->errstr;
+		# print $s->dsquot($lm),"\n";
+		# die('TEST')
+		# -form=>'HPD:HelpDesk_AuditLogSystem'
+		# ,-master=>'HPD:Help Desk', -master_pk=>'Entry ID',-master_fk=>'Original Request ID', -master_ts=>'Last Modified Date'
+	}
 	my ($rw, $rd) =({});
-	my ($cs, $cw) =(0,0);
-	while (1) {
+	my ($cs, $cw) =($cts,0);
+	while ($lm ? scalar(@$lm) : 1) {
 	  $cw++;
 	  foreach my $r ($s->query(-form=>$arg{-form}
 		,-fields=>$arg{-fields}
 		,-echo=>$arg{-echo}
-		,-query=>join(' AND ', map {$_ ? $_ : ()
-			} $arg{-query}, $fts && $vts ? "'" .$fts->{fieldName} ."'>=" .$vts : ()
-			) ||'1=1'
-		,-order=>$fts	? [$fts->{fieldName} => 'asc'] 
-				: [$fpk->{fieldName} => 'asc']
-		,-limit=>$arg{-lim_rf}
-		,-start=>$cs
+		,$lm
+		? (-query=>join(' AND '
+				, $arg{-query} ? '(' .$arg{-query} .')' : ()
+				, '(' .join(' OR '
+					, map {"'" .($s->{'-meta-sql'}->{$tbl}->{-cols}->{$arg{-master_fk}} && $s->{'-meta-sql'}->{$tbl}->{-cols}->{$arg{-master_fk}}->{fieldName} || $arg{-master_fk})
+						."'=\"$_\""
+						} splice @$lm, 0, $arg{-lim_or}) .')'))
+		: (-query=>join(' AND ', map {$_ ? "($_)" : ()
+				} $arg{-query}, $fts && $vts ? "'" .$fts->{fieldName} ."'>=" .$vts : ()
+				) ||'1=1'
+			,-limit=>$arg{-lim_rf}
+			,-start=>$cs)
+		,-order=>$fts
+			? [$fts->{fieldName} => 'asc', $fpk->{fieldName} => 'asc']
+			: [$fpk->{fieldName} => 'asc']
 		)) {
 		$cs++;
 		next if !$r->{$fpk->{fieldName}};
@@ -2612,6 +2725,10 @@ sub dbidsrpl {	# DBI datastore - load data from ARS
 		}
 	  }
 	  if (!$fts && ($cs == $cw *$arg{-lim_rf})) {
+		sleep($arg{-sleep} ||0);
+		next;
+	  }
+	  elsif ($lm) {
 		sleep($arg{-sleep} ||0);
 		next;
 	  }
@@ -3194,7 +3311,11 @@ sub soon {	# Periodical execution of this script
 		my $q =_sooncl($s, $cs, 1);
 		my $n =$q;
 		   $n =~s/[\\]/!/g;
+		   $n ="Global\\$n";
+		# sleep(60);
 		$wl =Win32::Event->new(0,0,$n);
+		# $s->fstore(">>$lf", $s->strtime() ."\t$$\tWin32::Event->new(0,0,$n) -> " .join(', ', $wl &&1 ||0, $^E ? ($^E +0) .".'$^E'" : ()) ."\n")
+		#	if $lf;
 		if ($wl && $^E && ($^E ==183)) {
 			print "Already '$q', done.\n";
 			$s->fstore(">>$lf", "\n" .$s->strtime() ."\t$$\tAlready '$q', done.\n")
@@ -3756,11 +3877,13 @@ sub cfpaction {	# Field Player: execute action
 				if !$r;
 		}
 		else {
-			$@ =$fn ? "Key '$fn' not defined" : "Key not defined"
+			$@ =$fn 
+			? "Key '$fn' not defined at vfentry('$fs')"
+			: "Key not defined at vfentry('$fs')"
 		}
 	}
 	else {
-		$@ ="Nothing to do, '-vfname' not defined"
+		$@ ="Nothing to do at 'vfentry', '-vfname' not defined"
 	}
  }
  elsif ($ae eq 'vfhash') {	# -preact
@@ -3778,13 +3901,13 @@ sub cfpaction {	# Field Player: execute action
 	}
 	$r =undef;
 	if (!$fs) {
-		$@ ="Nothing to do, '-vfname' not defined"
+		$@ ="Nothing to do at 'vfhash', '-vfname' not defined"
 	}
 	elsif (!$fn) {
-		$@ ="Key not defined"
+		$@ ="Key not defined at 'vfhash'"
 	}
 	elsif (!defined($fv)) {
-		$@ ="Key '$fn' not defined"		
+		$@ ="Key '$fn' not defined at 'vfhash'"
 	}
 	else {
 		$r =$s->vfhash($fs, $fn, $fv);
@@ -3846,7 +3969,7 @@ sub cfpaction {	# Field Player: execute action
 	my $fs =$f->{-vfname} ||$af->{-vfname};
 	$r =eval{$s->connect()
 		&& $s->entryIns(-form=>$frm
-			, map {	&$ffc($s, $_)
+			, map {	&$ffc($s, $_) ||(exists($_->{-entryIns}) && !$_->{-entryIns})
 			? ()
 			: ($_->{-namedb} => &$fvu($s, $_))
 			} cfpused($s))}
@@ -3869,7 +3992,7 @@ sub cfpaction {	# Field Player: execute action
 		my $fv =cfpv($s, $f);
 		my $fa =$s->vfdata($fs);
 		push @$fa, {$f->{-namedb} ? ($f->{-namedb}=>$r) : ()
-				,map { &$ffc($s, $_)
+				,map { &$ffc($s, $_) ||(exists($_->{-vfstore}) && !$_->{-vfstore})
 					? ()
 					: ($_->{-namedb} => &$fvu($s, $_, $ft))
 					} cfpused($s)};
@@ -3881,7 +4004,7 @@ sub cfpaction {	# Field Player: execute action
 	my $fs =$f->{-vfname} ||$af->{-vfname};
 	$r =eval{$s->connect()
 		&& $s->entryUpd(-form=>$frm, -id=>cfpvv($s,$f)
-		, map { &$ffc($s, $_)
+		, map { &$ffc($s, $_) ||(exists($_->{-entryUpd}) && !$_->{-entryUpd})
 			? ()
 			: ($_->{-namedb} => &$fvu($s, $_))
 			} cfpused($s))}
@@ -3905,7 +4028,7 @@ sub cfpaction {	# Field Player: execute action
 		foreach my $e (@$fa) {
 			next if !defined($e->{$fn}) || ($e->{$fn} ne $fv);
 			foreach my $f1 (cfpused($s)) {
-				next	if &$ffc($s, $f1);
+				next	if &$ffc($s, $f1) ||(exists($f1->{-vfstore}) && !$f1->{-vfstore});
 				$e->{$f1->{-namedb}} =&$fvu($s, $f1, $ft);
 			}
 			last;
@@ -3951,7 +4074,7 @@ sub cfpaction {	# Field Player: execute action
  elsif ($ae eq 'entrySave') {	# -action
 	my $a =cfpvv($s,$f) ? 'entryUpd' : cfpvp($s,$f) ? 'entryDel' : 'entryIns';
 	if ($a eq 'entryIns') { # $vy= 1 if cfpvv($s,$f)
-		map { &$ffc($s, $_)
+		map { &$ffc($s, $_) ||(exists($_->{-entryIns}) && !$_->{-entryIns})
 			? ()
 			: ($_->{-namedb} => &$fvu($s, $_))
 			} cfpused($s);
@@ -4013,17 +4136,23 @@ sub cfprun {	# Field Player: run
 		# (self, msg sub{}
 		# , form row sub{}, form top, form bottom) -> success
  my ($s, $cmsg, $cfld, $cfld0, $cfld1) =@_;
+ my $hmsg =ref($cmsg) eq 'HASH' 
+	? $cmsg 
+	: ($s->{-lang} ||'') =~/^ru/i
+	? {'Error'=>'Ошибка', 'Warning'=>'Предупреждение', 'Success'=>'Успешно'
+		,'Executing'=>'Выполнение', 'Done'=>'Выполнено'}
+	: {};
  $cmsg =sub{"\n<br /><font style=\"font-weight: bolder\""
 		.($_[1] =~/^(?:Error|Warning)/ ? ' color="red"' : '')
 		.'>'
-		.(defined($_[1]) ? $_[0]->{-cgi}->escapeHTML($_[1]) : 'undef')
+		.(defined($_[1]) ? $_[0]->{-cgi}->escapeHTML($hmsg->{$_[1]} ||$_[1]) : 'undef')
 		.": "
-		.(defined($_[2]) ? $_[0]->{-cgi}->escapeHTML($_[2]) : 'undef')
+		.(defined($_[2]) ? $_[0]->{-cgi}->escapeHTML($hmsg->{$_[2]} ||$_[2]) : 'undef')
 		."</font>"
 		# 'Error', 'Warning',
 		# 'Executing', 'Done'('Success', 'Error')
 		}
-	if !$cmsg;
+	if !$cmsg || (ref($cmsg) ne 'CODE');
  my $emsg =sub{	
 		$CGI::Carp::CUSTOM_MSG
 		? &$CGI::Carp::CUSTOM_MSG($_[1])
@@ -4045,13 +4174,14 @@ sub cfprun {	# Field Player: run
  local $s->{-fpmsg} =$cmsg;
  my $err;
  my $act;
- my $acd;
+ my $acf;
  my $aec;
  my $arv;
  foreach my $f (@{$s->{-fpl}}) {
 	next	if (ref($f) ne 'HASH')
 		|| (exists($f->{-used}) && !$f->{-used});
 	if ($f->{-preact} && ($f->{-preact} !~/^\d$/) && cfpvv($s, $f)) {
+		$acf =1;
 		$act =[] if !$act;
 		push @$act, $f
 	}
@@ -4060,22 +4190,22 @@ sub cfprun {	# Field Player: run
 	}
 	if ($f->{-key} && $act && !$err) {
 		$arv =1;
-		$acd =1;
 		foreach my $a (@$act) {
 			$arv =cfpaction($s, $a, '-preact', $arv, $f);
 			next if $arv;
 			$err =$@;
-			$act =undef;
 			last
 		}
+		$act =undef;
 		if (!$arv) {
 			&$emsg($s, $err ||"Unknown 'cfpaction' error");
 			$err =1;
-			$act =undef;
 			last;
 		}
 	}
-	$act =undef if $f->{-key};
+	if ($f->{-key}) {
+		$act =undef;
+	}
 	next if !cfpused($s, $f);
 	my $fn =cfpn($s, $f);
 	if (!$f->{-reset}
@@ -4189,43 +4319,44 @@ sub cfprun {	# Field Player: run
  }
  return(undef)
 	if $err;
- $act =	$acd =$arv =undef;
+ $act =	$acf =$arv =undef;
  foreach my $f (@{$s->{-fpl}}) {
 	next	if (ref($f) ne 'HASH')
 		|| (exists($f->{-used}) && !$f->{-used});
 	next if !cfpused($s, $f);
 	if ($f->{-action} && ($f->{-action} !~/^\d$/) && cfpvv($s, $f)) {
+		$acf =1;
 		$act =[] if !$act;
 		push @$act, $f
 	}
 	if ($f->{-key} && $act && !$err) {
 		$arv =1;
-		$acd =1;
 		foreach my $a (@$act) {
 			print &$cmsg($s, 'Executing', ($a->{-namelbl} ||$a->{-namecgi} ||'') .' ', $arv)
 				if $a->{-namelbl} ||$a->{-namecgi};
 			$arv =cfpaction($s, $a, '-action', $arv, $f);
 			next if $arv;
 			$err =$@;
-			$act =undef;
 			last;
 		}
+		$act =undef;
 		if (!$arv) {
 			&$emsg($s, $err ||"Unknown 'cfpaction' error");
 			$err =1;
-			$act =undef;
 			last;
 		}
 	}
-	$act =undef if $f->{-key};
+	if ($f->{-key}) {
+		$act =undef;
+	}
  }
- if ($act) {
+ if ($acf) {
 	print &$cmsg($s, 'Done', $err ? ('Error', $@) : ('Success', $arv))
  }
  return(undef)
 	if $err;
  return(1)
-	if $acd;
+	if $acf;
  foreach my $f (@{$s->{-fpl}}) {
 	next	if (ref($f) ne 'HASH')
 		|| (exists($f->{-used}) && !$f->{-used});

@@ -182,6 +182,8 @@ C<cfprun>, C<cfpaction>, C<cfpv>, C<cfpvv>, C<cfpvl>, C<cfpvp>
 
 * readonly: C<-name>.., C<-readonly>=>1
 
+* do not store: C<-name>.., C<-entryIns>=>0, C<-entryUpd>=>0, C<-vfstore>=>0
+
 * list&refresh: C<-name>.., C<-onchange>=>1, C<-labels>, C<-values>
 
 * optional button field: C<-name>.., C<-action>=>1, C<-used>=>condition
@@ -201,6 +203,8 @@ C<-namehtml> => sub{} -> 'html for user'
 C<-formdb> => 'name', C<-record> => 'name' || 'nameRowNumber'
 
 C<-used>, C<-unused> => boolean || 'field name' || ['field',...] || condition sub{}
+
+C<-entryIns>, C<-entryUpd>, C<-vfstore> => !exists ||false
 
 C<-preact> || C<-action> => 'action name' || action sub{} -> success
 
@@ -1185,7 +1189,7 @@ Without timestamps, additional queries will be invoked when '-lim_rf' records fe
 
 -pk => undef || primary key ARS field name, default is obtained from C<-meta-sql>
 
--timestamp => undef || 'Modified Date' timestamp ARS field name, default is obtained from C<-meta-sql>
+-timestamp => undef || 0 || 'Modified Date' timestamp ARS field name, default is obtained from C<-meta-sql>
 
 -ckpush => undef || 1 || 0 - insert, update, delete ARS records according to '_arsobject_insert', '_arsobject_update', '_arsobject_delete' column values.
 
@@ -1761,6 +1765,10 @@ If '-slotName-storable' => switch specified, it will be used instead of C<-stora
 =head1 VERSION
 
 =over
+
+=head2 2013-02-05
+
+Publishing 0.57 version
 
 
 =head2 2012-05-16
